@@ -4,7 +4,7 @@ import matter from 'gray-matter';
 import type { SkillDefinition } from './prompt-builder.js';
 
 export async function loadSkills(workspacePath: string): Promise<SkillDefinition[]> {
-  const agentsDir = join(workspacePath, '.agents');
+  const agentsDir = join(workspacePath, 'skills');
   const skills: SkillDefinition[] = [];
 
   try {
@@ -27,7 +27,7 @@ export async function loadSkills(workspacePath: string): Promise<SkillDefinition
       }
     }
   } catch {
-    // No .agents directory, return empty
+    // No skills directory, return empty
   }
 
   return skills;

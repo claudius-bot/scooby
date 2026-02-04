@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@scooby/channels": "workspace:*",
+    "@scooby/commands": "workspace:*",
     "@scooby/core": "workspace:*",
     "@scooby/gateway": "workspace:*",
     "@scooby/schemas": "workspace:*",

@@ -32,6 +32,7 @@ import {
   webFetchTool,
   imageGenTool,
   audioTranscribeTool,
+  loadSkills,
 } from '@scooby/core';
 import {
   TelegramAdapter,
@@ -41,6 +42,7 @@ import {
   type ChannelAdapter,
 } from '@scooby/channels';
 import { GatewayServer } from '@scooby/gateway';
+import { CommandProcessor, createDefaultRegistry } from '@scooby/commands';
 import { MessageRouter } from './router.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -125,6 +127,14 @@ async function main() {
   toolRegistry.register(webFetchTool);
   toolRegistry.register(imageGenTool);
   toolRegistry.register(audioTranscribeTool);
+
+  // 6b. Create command processor
+  const commandRegistry = createDefaultRegistry();
+  const commandProcessor = new CommandProcessor({
+    registry: commandRegistry,
+    config,
+  });
+  console.log('[Scooby] Command processor initialized');
 
   // 7. Channel adapters
   const channelAdapters: ChannelAdapter[] = [];
@@ -215,6 +225,43 @@ async function main() {
 
     // Bind connection to workspace
     gateway.getConnections().bindWorkspace(connectionId, workspaceId, session.id);
+
+    // Try to handle as a slash command
+    const cmdResult = await commandProcessor.tryHandle({
+      message: {
+        channelType: 'webchat',
+        conversationId: connectionId,
+        senderId: connectionId,
+        senderName: 'User',
+        text,
+        timestamp: new Date(),
+      },
+      workspace: ws,
+      session,
+      sessionManager: sessionMgr,
+      config,
+      globalModels: {
+        fast: config.models.fast.candidates,
+        slow: config.models.slow.candidates,
+      },
+      sendReply: async (replyText: string, format?: 'text' | 'markdown') => {
+        gateway.sendEvent(connectionId, 'chat.done', {
+          type: 'done',
+          response: replyText,
+          usage: { promptTokens: 0, completionTokens: 0 },
+        });
+      },
+      getUsageSummary: async (days?: number) => {
+        return loadUsageSummary(resolve(ws.path, 'data'), { days });
+      },
+      getSkills: async () => {
+        return loadSkills(ws.path);
+      },
+    });
+
+    if (cmdResult?.handled) {
+      return { sessionId: session.id, command: true };
+    }
 
     // Record user message
     await sessionMgr.appendTranscript(session.id, {
@@ -331,6 +378,39 @@ async function main() {
 
     const sessionMgr = sessionManagers.get(workspaceId)!;
     const session = await sessionMgr.getOrCreate(msg.channelType, msg.conversationId);
+
+    // Try to handle as a slash command
+    const adapter = channelAdapters.find((a) => a.type === msg.channelType);
+    const cmdResult = await commandProcessor.tryHandle({
+      message: msg,
+      workspace: ws,
+      session,
+      sessionManager: sessionMgr,
+      config,
+      globalModels: {
+        fast: config.models.fast.candidates,
+        slow: config.models.slow.candidates,
+      },
+      sendReply: async (replyText: string, format?: 'text' | 'markdown') => {
+        if (adapter) {
+          await adapter.send({
+            conversationId: msg.conversationId,
+            text: replyText,
+            format: format ?? 'markdown',
+          });
+        }
+      },
+      getUsageSummary: async (days?: number) => {
+        return loadUsageSummary(resolve(ws.path, 'data'), { days });
+      },
+      getSkills: async () => {
+        return loadSkills(ws.path);
+      },
+    });
+
+    if (cmdResult?.handled) {
+      return;
+    }
 
     // Process voice/audio attachments
     let messageContent = msg.text;
