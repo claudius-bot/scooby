@@ -324,7 +324,10 @@ async function main() {
         return codeManager.generate(workspaceId);
       },
       createWorkspace: async (name: string) => {
-        const info = await workspaceManager.createWorkspace(name);
+        const info = await workspaceManager.createWorkspace(name, {
+          channelType: 'webchat',
+          conversationId: connectionId,
+        });
         await initializeWorkspace(info.id, info.path);
         const code = codeManager.generate(info.id);
         return { workspaceId: info.id, code };
@@ -566,7 +569,10 @@ async function main() {
         return codeManager.generate(workspaceId);
       },
       createWorkspace: async (name: string) => {
-        const info = await workspaceManager.createWorkspace(name);
+        const info = await workspaceManager.createWorkspace(name, {
+          channelType: msg.channelType,
+          conversationId: msg.conversationId,
+        });
         await initializeWorkspace(info.id, info.path);
         const code = codeManager.generate(info.id);
         return { workspaceId: info.id, code };
