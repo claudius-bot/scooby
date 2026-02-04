@@ -358,16 +358,6 @@ async function main() {
         }
         return workspaces.has(codeOrId);
       },
-      findWorkspaceByName: (name: string): string | undefined => {
-        const lowerName = name.toLowerCase();
-        for (const [id, wsItem] of workspaces) {
-          if (wsItem.agent.name.toLowerCase() === lowerName) {
-            return id;
-          }
-        }
-        const dynamic = workspaceManager.findByName(name);
-        return dynamic?.id;
-      },
     });
 
     if (cmdResult?.handled) {
@@ -616,18 +606,6 @@ async function main() {
         if (!workspaces.has(codeOrId)) return false;
         await router.bindChannel(msg.channelType, msg.conversationId, codeOrId);
         return true;
-      },
-      findWorkspaceByName: (name: string): string | undefined => {
-        const lowerName = name.toLowerCase();
-        // Check config workspaces
-        for (const [id, ws] of workspaces) {
-          if (ws.agent.name.toLowerCase() === lowerName) {
-            return id;
-          }
-        }
-        // Check dynamic workspaces by name
-        const dynamic = workspaceManager.findByName(name);
-        return dynamic?.id;
       },
     });
 

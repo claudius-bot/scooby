@@ -60,8 +60,6 @@ export interface CommandContext {
   getAccessibleWorkspaces?: () => Promise<WorkspaceInfo[]>;
   /** Switch the current channel to a different workspace. */
   switchWorkspace?: (workspaceId: string) => Promise<boolean>;
-  /** Check if a workspace name exists and return its ID. */
-  findWorkspaceByName?: (name: string) => string | undefined;
 }
 
 /**

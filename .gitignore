@@ -10,3 +10,6 @@ dist/
 # Workspace runtime data (transcripts, usage, memory, generated images)
 workspaces/*/sessions/
 workspaces/*/data/
+
+# Global runtime data (channel bindings, access, dynamic workspaces)
+data/

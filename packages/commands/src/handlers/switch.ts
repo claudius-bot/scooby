@@ -8,7 +8,7 @@ export function createSwitchCommand(): CommandDefinition {
     name: 'switch',
     aliases: ['workspace', 'ws'],
     description: 'Switch to a different workspace',
-    usage: '/switch [code or name]',
+    usage: '/switch [code or id]',
     handler: async (args: string, ctx: CommandContext): Promise<CommandResult> => {
       const arg = args.trim();
 
@@ -22,8 +22,8 @@ export function createSwitchCommand(): CommandDefinition {
         return handleCodeSwitch(arg, ctx);
       }
 
-      // Otherwise, treat as workspace name
-      return handleNameSwitch(arg, ctx);
+      // Otherwise, treat as workspace ID
+      return handleIdSwitch(arg, ctx);
     },
   };
 }
@@ -52,7 +52,7 @@ async function handleListWorkspaces(ctx: CommandContext): Promise<CommandResult>
       return `${ws.emoji} **${ws.name}** (\`${ws.id}\`)${current}${access}`;
     }),
     '',
-    'Use `/switch <name>` to switch workspaces.',
+    'Use `/switch <id>` to switch workspaces.',
     'Use `/switch <code>` to join with a workspace code.',
   ];
 
@@ -82,27 +82,25 @@ async function handleCodeSwitch(code: string, ctx: CommandContext): Promise<Comm
   }
 }
 
-async function handleNameSwitch(name: string, ctx: CommandContext): Promise<CommandResult> {
-  if (!ctx.findWorkspaceByName || !ctx.switchWorkspace || !ctx.getAccessibleWorkspaces) {
+async function handleIdSwitch(id: string, ctx: CommandContext): Promise<CommandResult> {
+  if (!ctx.switchWorkspace || !ctx.getAccessibleWorkspaces) {
     const response = 'Workspace switching not available.';
     await ctx.sendReply(response, 'text');
     return { handled: true, response, suppressTranscript: true };
   }
 
-  // Find workspace by name
-  const workspaceId = ctx.findWorkspaceByName(name);
-  if (!workspaceId) {
-    const response = `No workspace found with name "${name}".\n\nUse \`/switch\` to see available workspaces.`;
+  // Get accessible workspaces and find by ID
+  const workspaces = await ctx.getAccessibleWorkspaces();
+  const workspace = workspaces.find((ws) => ws.id === id);
+
+  if (!workspace) {
+    const response = `No workspace found with ID "${id}".\n\nUse \`/switch\` to see available workspaces.`;
     await ctx.sendReply(response, 'markdown');
     return { handled: true, response, suppressTranscript: true };
   }
 
-  // Check if user has access
-  const workspaces = await ctx.getAccessibleWorkspaces();
-  const workspace = workspaces.find((ws) => ws.id === workspaceId);
-
-  if (!workspace || !workspace.hasAccess) {
-    const response = `You don't have access to workspace "${name}".\n\nYou need a workspace code to join. Ask someone in that workspace to run \`/gen-code\`.`;
+  if (!workspace.hasAccess) {
+    const response = `You don't have access to workspace "${id}".\n\nYou need a workspace code to join. Ask someone in that workspace to run \`/gen-code\`.`;
     await ctx.sendReply(response, 'markdown');
     return { handled: true, response, suppressTranscript: true };
   }
@@ -115,7 +113,7 @@ async function handleNameSwitch(name: string, ctx: CommandContext): Promise<Comm
   }
 
   // Switch to the workspace
-  const success = await ctx.switchWorkspace(workspaceId);
+  const success = await ctx.switchWorkspace(id);
 
   if (success) {
     const response = `Switched to ${workspace.emoji} **${workspace.name}**.`;

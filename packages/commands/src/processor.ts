@@ -33,7 +33,6 @@ export interface ProcessMessageOptions {
   createWorkspace?: (name: string) => Promise<{ workspaceId: string; code: string }>;
   getAccessibleWorkspaces?: () => Promise<WorkspaceInfo[]>;
   switchWorkspace?: (workspaceId: string) => Promise<boolean>;
-  findWorkspaceByName?: (name: string) => string | undefined;
 }
 
 export interface CommandProcessorConfig {
@@ -87,7 +86,6 @@ export class CommandProcessor {
       createWorkspace: opts.createWorkspace,
       getAccessibleWorkspaces: opts.getAccessibleWorkspaces,
       switchWorkspace: opts.switchWorkspace,
-      findWorkspaceByName: opts.findWorkspaceByName,
     };
 
     // Execute the command
