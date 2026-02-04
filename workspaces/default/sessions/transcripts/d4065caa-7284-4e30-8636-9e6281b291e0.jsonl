@@ -1,8 +1,0 @@
-{"timestamp":"2026-02-04T18:02:14.160Z","role":"user","content":"Hey"}
-{"timestamp":"2026-02-04T18:02:17.435Z","role":"assistant","content":"Hello! How can I assist you today?","metadata":{"modelUsed":"openai:gpt-4o-mini","modelGroup":"fast","tokenUsage":{"prompt":null,"completion":null}}}
-{"timestamp":"2026-02-04T18:04:35.444Z","role":"user","content":"Hey"}
-{"timestamp":"2026-02-04T18:04:37.362Z","role":"assistant","content":"Hi again! What’s on your mind?","metadata":{"modelUsed":"openai:gpt-4o-mini","modelGroup":"fast","tokenUsage":{"prompt":null,"completion":null}}}
-{"timestamp":"2026-02-04T18:04:59.271Z","role":"user","content":"Hey"}
-{"timestamp":"2026-02-04T18:05:01.312Z","role":"assistant","content":"Hey there! If you need anything or have a question, just let me know!","metadata":{"modelUsed":"openai:gpt-4o-mini","modelGroup":"fast","tokenUsage":{"prompt":null,"completion":null}}}
-{"timestamp":"2026-02-04T18:06:49.450Z","role":"user","content":"What model are you?"}
-{"timestamp":"2026-02-04T18:06:51.624Z","role":"assistant","content":"I'm based on the GPT-4 architecture, designed to assist with a variety of tasks and answer questions. How can I help you today?","metadata":{"modelUsed":"openai:gpt-4o-mini","modelGroup":"fast","tokenUsage":{"prompt":null,"completion":null}}}

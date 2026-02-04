@@ -1,2 +1,0 @@
-{"timestamp":"2026-02-04T04:21:39.577Z","role":"user","content":"What is your name?"}
-{"timestamp":"2026-02-04T04:21:41.442Z","role":"assistant","content":"I'm Scooby, your friendly AI assistant! How can I help you today?","metadata":{"modelUsed":"openai:gpt-4o-mini","modelGroup":"fast","tokenUsage":{"prompt":null,"completion":null}}}

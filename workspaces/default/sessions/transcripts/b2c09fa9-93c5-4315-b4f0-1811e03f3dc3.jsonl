@@ -1,2 +1,0 @@
-{"timestamp":"2026-02-04T04:15:45.002Z","role":"user","content":"Hey"}
-{"timestamp":"2026-02-04T04:15:47.305Z","role":"assistant","content":"Hello! How can I assist you today?","metadata":{"modelUsed":"openai:gpt-4o-mini","modelGroup":"fast","tokenUsage":{"prompt":null,"completion":null}}}

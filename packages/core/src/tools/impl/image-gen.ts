@@ -14,7 +14,7 @@ export const imageGenTool: ScoobyToolDefinition = {
       .optional()
       .describe('Provider to use. Auto-detected from env if omitted.'),
     size: z.string().optional().default('1024x1024').describe('Image size (e.g. "1024x1024")'),
-    quality: z.string().optional().default('standard').describe('Quality setting'),
+    quality: z.string().optional().default('auto').describe('Quality setting (low, medium, high, auto)'),
   }),
   async execute(input, ctx) {
     const imagesDir = join(ctx.workspace.path, 'data', 'images');
@@ -64,7 +64,7 @@ async function generateOpenAI(
       size: input.size,
       quality: input.quality,
       n: 1,
-      response_format: 'b64_json',
+      output_format: 'png',
     }),
   });
 
@@ -123,7 +123,7 @@ async function generateGemini(
     for (const part of parts) {
       if (part.inlineData?.data) {
         const buffer = Buffer.from(part.inlineData.data, 'base64');
-        const mimeExt = part.inlineData.mimeType?.includes('png') ? 'png' : 'png';
+        const mimeExt = part.inlineData.mimeType?.includes('png') ? 'png' : 'jpg';
         const filePath = join(imagesDir, `${timestamp}-${slug}.${mimeExt}`);
         await writeFile(filePath, buffer);
         return `Image saved to ${filePath} (${buffer.length} bytes)`;
