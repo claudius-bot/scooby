@@ -34,3 +34,5 @@ export { fileEditTool } from './tools/impl/file-edit.js';
 export { browserTool } from './tools/impl/browser.js';
 export { sendMessageTool } from './tools/impl/send-message.js';
 export { memorySearchTool } from './tools/impl/memory-search.js';
+export { webSearchTool } from './tools/impl/web-search.js';
+export { webFetchTool } from './tools/impl/web-fetch.js';

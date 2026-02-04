@@ -1,10 +1,10 @@
 import { createOpenAI } from '@ai-sdk/openai';
 import { createAnthropic } from '@ai-sdk/anthropic';
-import type { LanguageModelV1, EmbeddingModelV1 } from 'ai';
+import type { LanguageModelV1, EmbeddingModel } from 'ai';
 
 type ProviderFactory = {
   languageModel(modelId: string): LanguageModelV1;
-  embeddingModel?(modelId: string): EmbeddingModelV1<string>;
+  embeddingModel?(modelId: string): EmbeddingModel<string>;
 };
 
 const providers = new Map<string, ProviderFactory>();
@@ -43,7 +43,7 @@ export function getLanguageModel(provider: string, model: string): LanguageModel
   return getOrCreateProvider(provider).languageModel(model);
 }
 
-export function getEmbeddingModel(provider: string, model: string): EmbeddingModelV1<string> {
+export function getEmbeddingModel(provider: string, model: string): EmbeddingModel<string> {
   const p = getOrCreateProvider(provider);
   if (!p.embeddingModel) {
     throw new Error(`Provider "${provider}" does not support embeddings`);

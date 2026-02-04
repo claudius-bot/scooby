@@ -1,5 +1,7 @@
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { config as loadEnv } from 'dotenv';
+import type { CoreMessage } from 'ai';
 import {
   loadConfig,
   loadWorkspace,
@@ -22,6 +24,8 @@ import {
   browserTool,
   sendMessageTool,
   memorySearchTool,
+  webSearchTool,
+  webFetchTool,
 } from '@scooby/core';
 import {
   TelegramAdapter,
@@ -34,6 +38,9 @@ import { GatewayServer } from '@scooby/gateway';
 import { MessageRouter } from './router.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// Load .env from project root
+loadEnv({ path: resolve(__dirname, '..', '..', '..', '.env') });
 
 async function main() {
   console.log('[Scooby] Starting...');
@@ -96,17 +103,22 @@ async function main() {
   toolRegistry.register(browserTool);
   toolRegistry.register(sendMessageTool);
   toolRegistry.register(memorySearchTool);
+  toolRegistry.register(webSearchTool);
+  toolRegistry.register(webFetchTool);
 
   // 7. Channel adapters
   const channelAdapters: ChannelAdapter[] = [];
   let telegramAdapter: TelegramAdapter | null = null;
   const webChatAdapter = new WebChatAdapter();
 
-  if (config.channels?.telegram?.botToken) {
+  const telegramToken = config.channels?.telegram?.botToken;
+  if (telegramToken && !telegramToken.includes('${')) {
     telegramAdapter = new TelegramAdapter({
-      botToken: config.channels.telegram.botToken,
+      botToken: telegramToken,
     });
     channelAdapters.push(telegramAdapter);
+  } else if (telegramToken) {
+    console.log('[Scooby] Telegram bot token not configured (env var not set), skipping Telegram');
   }
 
   if (config.channels?.webchat?.enabled) {
@@ -191,9 +203,9 @@ async function main() {
     const agentRunner = new AgentRunner(toolRegistry, cooldowns, sessionMgr);
     const transcript = await sessionMgr.getTranscript(session.id);
     const messages = transcript.map((t) => ({
-      role: t.role as 'user' | 'assistant' | 'system' | 'tool',
+      role: t.role,
       content: t.content,
-    }));
+    })) as CoreMessage[];
 
     // Get memory context
     const memService = memoryServices.get(workspaceId);
@@ -304,9 +316,9 @@ async function main() {
     // Get transcript for context
     const transcript = await sessionMgr.getTranscript(session.id);
     const messages = transcript.map((t) => ({
-      role: t.role as 'user' | 'assistant' | 'system' | 'tool',
+      role: t.role,
       content: t.content,
-    }));
+    })) as CoreMessage[];
 
     // Get memory context
     const memService = memoryServices.get(workspaceId);
@@ -456,7 +468,11 @@ async function main() {
   await gateway.start();
 
   for (const adapter of channelAdapters) {
-    await adapter.start();
+    try {
+      await adapter.start();
+    } catch (err) {
+      console.error(`[Scooby] Failed to start ${adapter.type} adapter:`, err instanceof Error ? err.message : err);
+    }
   }
 
   heartbeat.start();

@@ -10,25 +10,25 @@ export const ModelCandidateSchema = z.object({
 export type ModelCandidate = z.infer<typeof ModelCandidateSchema>;
 
 // ── Model group (fast / slow) ────────────────────────────────────────
-export const ModelGroupSchema = z.object({
+export const ModelGroupConfigSchema = z.object({
   candidates: z.array(ModelCandidateSchema),
 });
 
-export type ModelGroup = z.infer<typeof ModelGroupSchema>;
+export type ModelGroupConfig = z.infer<typeof ModelGroupConfigSchema>;
 
 // ── Embedding reference ──────────────────────────────────────────────
-export const EmbeddingModelSchema = z.object({
+export const EmbeddingModelConfigSchema = z.object({
   provider: z.string(),
   model: z.string(),
 });
 
-export type EmbeddingModel = z.infer<typeof EmbeddingModelSchema>;
+export type EmbeddingModelConfig = z.infer<typeof EmbeddingModelConfigSchema>;
 
 // ── Top-level models block ───────────────────────────────────────────
 export const ModelsConfigSchema = z.object({
-  fast: ModelGroupSchema,
-  slow: ModelGroupSchema,
-  embedding: EmbeddingModelSchema.optional(),
+  fast: ModelGroupConfigSchema,
+  slow: ModelGroupConfigSchema,
+  embedding: EmbeddingModelConfigSchema.optional(),
 });
 
 export type ModelsConfig = z.infer<typeof ModelsConfigSchema>;
@@ -93,11 +93,11 @@ export const CronEntrySchema = z.object({
 export type CronEntry = z.infer<typeof CronEntrySchema>;
 
 // ── Heartbeat ────────────────────────────────────────────────────────
-export const HeartbeatConfigSchema = z.object({
+export const HeartbeatSettingsSchema = z.object({
   intervalMinutes: z.number().default(5),
 });
 
-export type HeartbeatConfig = z.infer<typeof HeartbeatConfigSchema>;
+export type HeartbeatSettings = z.infer<typeof HeartbeatSettingsSchema>;
 
 // ── Root config ──────────────────────────────────────────────────────
 export const ScoobyConfigSchema = z.object({
@@ -107,7 +107,7 @@ export const ScoobyConfigSchema = z.object({
   gateway: GatewayConfigSchema.optional(),
   session: SessionConfigSchema.optional(),
   cron: z.array(CronEntrySchema).optional(),
-  heartbeat: HeartbeatConfigSchema.optional(),
+  heartbeat: HeartbeatSettingsSchema.optional(),
 });
 
 export type ScoobyConfig = z.infer<typeof ScoobyConfigSchema>;

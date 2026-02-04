@@ -1,5 +1,4 @@
 import Database from 'better-sqlite3';
-import * as sqliteVec from 'sqlite-vec';
 
 export interface MemoryChunk {
   id: string;
@@ -18,10 +17,18 @@ export interface SearchResult {
 
 export class MemoryStore {
   private db: Database.Database;
+  private vecAvailable = false;
 
   constructor(dbPath: string) {
     this.db = new Database(dbPath);
-    sqliteVec.load(this.db);
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const sqliteVec = require('sqlite-vec');
+      sqliteVec.load(this.db);
+      this.vecAvailable = true;
+    } catch {
+      // sqlite-vec not available — vector search will be disabled
+    }
     this.initialize();
   }
 
@@ -55,6 +62,7 @@ export class MemoryStore {
    * Create the sqlite-vec virtual table once the embedding dimensions are known.
    */
   ensureVectorTable(dimensions: number): void {
+    if (!this.vecAvailable) return;
     try {
       this.db.exec(`
         CREATE VIRTUAL TABLE IF NOT EXISTS chunk_embeddings USING vec0(
@@ -78,11 +86,6 @@ export class MemoryStore {
       VALUES ((SELECT rowid FROM chunks WHERE id = ?), ?)
     `);
 
-    const insertVec = this.db.prepare(`
-      INSERT OR REPLACE INTO chunk_embeddings (chunk_id, embedding)
-      VALUES (?, ?)
-    `);
-
     const transaction = this.db.transaction(() => {
       insertChunkStmt.run(
         chunk.id,
@@ -93,7 +96,14 @@ export class MemoryStore {
         chunk.metadata ? JSON.stringify(chunk.metadata) : null,
       );
       insertFts.run(chunk.id, chunk.content);
-      insertVec.run(chunk.id, new Float32Array(embedding));
+
+      if (this.vecAvailable) {
+        const insertVec = this.db.prepare(`
+          INSERT OR REPLACE INTO chunk_embeddings (chunk_id, embedding)
+          VALUES (?, ?)
+        `);
+        insertVec.run(chunk.id, new Float32Array(embedding));
+      }
     });
 
     transaction();
@@ -105,12 +115,13 @@ export class MemoryStore {
       .all(workspaceId, source) as Array<{ id: string }>;
 
     const deleteChunkStmt = this.db.prepare('DELETE FROM chunks WHERE id = ?');
-    const deleteVec = this.db.prepare('DELETE FROM chunk_embeddings WHERE chunk_id = ?');
 
     const transaction = this.db.transaction(() => {
       for (const c of chunks) {
         deleteChunkStmt.run(c.id);
-        deleteVec.run(c.id);
+        if (this.vecAvailable) {
+          this.db.prepare('DELETE FROM chunk_embeddings WHERE chunk_id = ?').run(c.id);
+        }
       }
     });
 
@@ -118,6 +129,8 @@ export class MemoryStore {
   }
 
   vectorSearch(workspaceId: string, embedding: number[], limit: number = 6): SearchResult[] {
+    if (!this.vecAvailable) return [];
+
     const rows = this.db
       .prepare(
         `SELECT ce.chunk_id, ce.distance,
@@ -152,7 +165,18 @@ export class MemoryStore {
     }));
   }
 
+  private sanitizeFtsQuery(query: string): string {
+    // Remove FTS5 special characters and wrap each word in double quotes
+    const words = query
+      .replace(/[^\w\s]/g, ' ')
+      .split(/\s+/)
+      .filter((w) => w.length > 0);
+    if (words.length === 0) return '""';
+    return words.map((w) => `"${w}"`).join(' ');
+  }
+
   keywordSearch(workspaceId: string, query: string, limit: number = 6): SearchResult[] {
+    const sanitized = this.sanitizeFtsQuery(query);
     const rows = this.db
       .prepare(
         `SELECT c.id, c.workspace_id, c.source, c.content, c.chunk_index, c.metadata,
@@ -163,7 +187,7 @@ export class MemoryStore {
          ORDER BY rank
          LIMIT ?`,
       )
-      .all(query, workspaceId, limit) as Array<{
+      .all(sanitized, workspaceId, limit) as Array<{
       id: string;
       workspace_id: string;
       source: string;

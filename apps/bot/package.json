@@ -11,9 +11,11 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@scooby/core": "workspace:*",
     "@scooby/channels": "workspace:*",
-    "@scooby/gateway": "workspace:*"
+    "@scooby/core": "workspace:*",
+    "@scooby/gateway": "workspace:*",
+    "ai": "^4.1.0",
+    "dotenv": "^17.2.3"
   },
   "devDependencies": {
     "tsx": "^4.19.0",

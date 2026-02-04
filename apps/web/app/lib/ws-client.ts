@@ -182,7 +182,23 @@ export class WsClient {
       return;
     }
 
-    // Notification / event
+    // Server-pushed event (event/data format)
+    if ('event' in parsed) {
+      const event = parsed as unknown as { event: string; data: unknown };
+      const handlers = this.eventHandlers.get(event.event);
+      if (handlers) {
+        handlers.forEach((handler) => {
+          try {
+            handler(event.data);
+          } catch {
+            // swallow handler errors
+          }
+        });
+      }
+      return;
+    }
+
+    // JSON-RPC notification (method/params format)
     if ('method' in parsed) {
       const notification = parsed as JsonRpcNotification;
       const handlers = this.eventHandlers.get(notification.method);
