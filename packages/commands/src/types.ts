@@ -10,6 +10,17 @@ import type {
 import type { UsageSummary } from '@scooby/schemas';
 
 /**
+ * Info about a workspace for listing/switching.
+ */
+export interface WorkspaceInfo {
+  id: string;
+  name: string;
+  emoji: string;
+  hasAccess: boolean;
+  isCurrentlyConnected: boolean;
+}
+
+/**
  * Context provided to command handlers with everything they need
  * to execute the command.
  */
@@ -40,6 +51,15 @@ export interface CommandContext {
   stopRunningAgent?: () => boolean;
   getUsageSummary?: (days?: number) => Promise<UsageSummary>;
   getSkills?: () => Promise<SkillDefinition[]>;
+  generateWorkspaceCode?: () => string;
+
+  // Workspace management
+  /** Create a new workspace and return a code to join it. */
+  createWorkspace?: (name: string) => Promise<{ workspaceId: string; code: string }>;
+  /** Get workspaces the current channel can access. */
+  getAccessibleWorkspaces?: () => Promise<WorkspaceInfo[]>;
+  /** Switch the current channel to a different workspace. */
+  switchWorkspace?: (workspaceId: string) => Promise<boolean>;
 }
 
 /**

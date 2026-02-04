@@ -42,7 +42,14 @@ import {
   type ChannelAdapter,
 } from '@scooby/channels';
 import { GatewayServer } from '@scooby/gateway';
-import { CommandProcessor, createDefaultRegistry } from '@scooby/commands';
+import {
+  CommandProcessor,
+  createDefaultRegistry,
+  CodeManager,
+  ChannelAccessStore,
+  WorkspaceManager,
+  type WorkspaceInfo,
+} from '@scooby/commands';
 import { MessageRouter } from './router.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -128,12 +135,66 @@ async function main() {
   toolRegistry.register(imageGenTool);
   toolRegistry.register(audioTranscribeTool);
 
-  // 6b. Create command processor
+  // 6b. Create command processor, code manager, and workspace management
   const commandRegistry = createDefaultRegistry();
   const commandProcessor = new CommandProcessor({
     registry: commandRegistry,
     config,
   });
+  const codeManager = new CodeManager();
+
+  // Channel access store - tracks which channels have access to which workspaces
+  const channelAccess = new ChannelAccessStore();
+  channelAccess.setPath(resolve(configDir, 'data', 'channel-access.json'));
+  await channelAccess.load();
+
+  // Workspace manager - handles dynamic workspace creation
+  const workspaceManager = new WorkspaceManager(resolve(configDir, 'workspaces'));
+  workspaceManager.setPath(resolve(configDir, 'data', 'dynamic-workspaces.json'));
+  await workspaceManager.load();
+
+  // Load any dynamic workspaces that were created previously
+  for (const info of workspaceManager.listWorkspaces()) {
+    if (workspaces.has(info.id)) continue;
+
+      try {
+        const ws = await loadWorkspace({ id: info.id, path: info.path }, configDir);
+        workspaces.set(ws.id, ws);
+
+        // Create session manager and usage tracker for this workspace
+        const mgr = new SessionManager({
+          sessionsDir: resolve(ws.path, 'sessions'),
+          workspaceId: ws.id,
+          idleResetMinutes: sessionConfig.idleResetMinutes ?? 30,
+          maxTranscriptLines: sessionConfig.maxTranscriptLines ?? 500,
+        });
+        sessionManagers.set(ws.id, mgr);
+        usageTrackers.set(ws.id, new UsageTracker(resolve(ws.path, 'data')));
+
+        console.log(`[Scooby] Dynamic workspace loaded: ${ws.id} (${ws.agent.name})`);
+      } catch (err) {
+        console.error(`[Scooby] Failed to load dynamic workspace ${info.id}:`, err);
+      }
+    
+  }
+
+  // Helper to initialize a newly created workspace
+  const initializeWorkspace = async (workspaceId: string, workspacePath: string) => {
+    const ws = await loadWorkspace({ id: workspaceId, path: workspacePath }, configDir);
+    workspaces.set(ws.id, ws);
+
+    const mgr = new SessionManager({
+      sessionsDir: resolve(ws.path, 'sessions'),
+      workspaceId: ws.id,
+      idleResetMinutes: sessionConfig.idleResetMinutes ?? 30,
+      maxTranscriptLines: sessionConfig.maxTranscriptLines ?? 500,
+    });
+    sessionManagers.set(ws.id, mgr);
+    usageTrackers.set(ws.id, new UsageTracker(resolve(ws.path, 'data')));
+
+    return ws;
+  };
+
   console.log('[Scooby] Command processor initialized');
 
   // 7. Channel adapters
@@ -157,6 +218,8 @@ async function main() {
 
   // 8. Message router
   const router = new MessageRouter(config);
+  router.setBindingsPath(resolve(configDir, 'data', 'channel-bindings.json'));
+  await router.loadBindings();
 
   // 9. Send message function for tools
   const sendMessage = async (channelType: string, msg: OutboundMessage) => {
@@ -256,6 +319,44 @@ async function main() {
       },
       getSkills: async () => {
         return loadSkills(ws.path);
+      },
+      generateWorkspaceCode: () => {
+        return codeManager.generate(workspaceId);
+      },
+      createWorkspace: async (name: string) => {
+        const info = await workspaceManager.createWorkspace(name, {
+          channelType: 'webchat',
+          conversationId: connectionId,
+        });
+        await initializeWorkspace(info.id, info.path);
+        const code = codeManager.generate(info.id);
+        return { workspaceId: info.id, code };
+      },
+      getAccessibleWorkspaces: async (): Promise<WorkspaceInfo[]> => {
+        const accessibleIds = channelAccess.getAccessibleWorkspaces('webchat', connectionId);
+        const result: WorkspaceInfo[] = [];
+        for (const [id, wsItem] of workspaces) {
+          const hasAccess = accessibleIds.includes(id);
+          result.push({
+            id,
+            name: wsItem.agent.name,
+            emoji: wsItem.agent.emoji,
+            hasAccess,
+            isCurrentlyConnected: id === workspaceId,
+          });
+        }
+        return result;
+      },
+      switchWorkspace: async (codeOrId: string): Promise<boolean> => {
+        // WebChat doesn't use router bindings the same way
+        // For now, just validate and return success
+        if (/^\d{6}$/.test(codeOrId)) {
+          const targetWorkspaceId = codeManager.validate(codeOrId);
+          if (!targetWorkspaceId) return false;
+          await channelAccess.grantAccess('webchat', connectionId, targetWorkspaceId);
+          return true;
+        }
+        return workspaces.has(codeOrId);
       },
     });
 
@@ -363,6 +464,55 @@ async function main() {
   // 11. Message handler for channel adapters
   const messageQueue = new MessageQueue({ debounceMs: 500 });
   messageQueue.onFlush(async (msg: InboundMessage) => {
+    const adapter = channelAdapters.find((a) => a.type === msg.channelType);
+
+    // Check if this channel has an explicit binding
+    const hasExplicitBinding = router.hasExplicitBinding(msg.channelType, msg.conversationId);
+
+    // If no explicit binding, check if message is a workspace code
+    if (!hasExplicitBinding) {
+      const trimmedText = msg.text.trim();
+
+      // Check if message is a 6-digit code
+      if (/^\d{6}$/.test(trimmedText)) {
+        const workspaceId = codeManager.validate(trimmedText);
+        if (workspaceId) {
+          // Valid code - bind channel to workspace and grant access
+          await router.bindChannel(msg.channelType, msg.conversationId, workspaceId);
+          await channelAccess.grantAccess(msg.channelType, msg.conversationId, workspaceId);
+          const ws = workspaces.get(workspaceId);
+          if (adapter && ws) {
+            await adapter.send({
+              conversationId: msg.conversationId,
+              text: `Connected to workspace "${ws.agent.name}" ${ws.agent.emoji}. You can now start chatting!`,
+              format: 'text',
+            });
+          }
+          return;
+        } else {
+          // Invalid or expired code
+          if (adapter) {
+            await adapter.send({
+              conversationId: msg.conversationId,
+              text: 'Invalid or expired code. Please request a new code from an existing channel using /gen-code.',
+              format: 'text',
+            });
+          }
+          return;
+        }
+      }
+
+      // Not a code - prompt for one
+      if (adapter) {
+        await adapter.send({
+          conversationId: msg.conversationId,
+          text: 'This channel is not connected to a workspace. Please enter a 6-digit workspace code to connect.\n\nYou can generate a code from an existing channel using /gen-code.',
+          format: 'text',
+        });
+      }
+      return;
+    }
+
     const route = router.route(msg);
     if (!route) {
       console.warn(`[Scooby] No route for message from ${msg.channelType}:${msg.conversationId}`);
@@ -380,7 +530,6 @@ async function main() {
     const session = await sessionMgr.getOrCreate(msg.channelType, msg.conversationId);
 
     // Try to handle as a slash command
-    const adapter = channelAdapters.find((a) => a.type === msg.channelType);
     const cmdResult = await commandProcessor.tryHandle({
       message: msg,
       workspace: ws,
@@ -405,6 +554,58 @@ async function main() {
       },
       getSkills: async () => {
         return loadSkills(ws.path);
+      },
+      generateWorkspaceCode: () => {
+        return codeManager.generate(workspaceId);
+      },
+      createWorkspace: async (name: string) => {
+        const info = await workspaceManager.createWorkspace(name, {
+          channelType: msg.channelType,
+          conversationId: msg.conversationId,
+        });
+        await initializeWorkspace(info.id, info.path);
+        const code = codeManager.generate(info.id);
+        return { workspaceId: info.id, code };
+      },
+      getAccessibleWorkspaces: async (): Promise<WorkspaceInfo[]> => {
+        const accessibleIds = channelAccess.getAccessibleWorkspaces(msg.channelType, msg.conversationId);
+        const currentRoute = router.route(msg);
+        const currentWorkspaceId = currentRoute?.workspaceId;
+
+        const result: WorkspaceInfo[] = [];
+        for (const [id, ws] of workspaces) {
+          const hasAccess = accessibleIds.includes(id);
+          result.push({
+            id,
+            name: ws.agent.name,
+            emoji: ws.agent.emoji,
+            hasAccess,
+            isCurrentlyConnected: id === currentWorkspaceId,
+          });
+        }
+        return result;
+      },
+      switchWorkspace: async (codeOrId: string): Promise<boolean> => {
+        // Check if it's a 6-digit code
+        if (/^\d{6}$/.test(codeOrId)) {
+          const targetWorkspaceId = codeManager.validate(codeOrId);
+          if (!targetWorkspaceId) return false;
+          await router.bindChannel(msg.channelType, msg.conversationId, targetWorkspaceId);
+          await channelAccess.grantAccess(msg.channelType, msg.conversationId, targetWorkspaceId);
+          const targetWs = workspaces.get(targetWorkspaceId);
+          if (adapter && targetWs) {
+            await adapter.send({
+              conversationId: msg.conversationId,
+              text: `Switched to ${targetWs.agent.emoji} **${targetWs.agent.name}**.`,
+              format: 'markdown',
+            });
+          }
+          return true;
+        }
+        // Otherwise it's a workspace ID - just switch (access already verified by command)
+        if (!workspaces.has(codeOrId)) return false;
+        await router.bindChannel(msg.channelType, msg.conversationId, codeOrId);
+        return true;
       },
     });
 
