@@ -120,12 +120,12 @@
     "status": "archived"
   },
   "telegram:6039959147": {
-    "id": "d4065caa-7284-4e30-8636-9e6281b291e0",
+    "id": "e8c861c4-9d61-42e1-b68f-7799ac93cd07",
     "workspaceId": "default",
     "channelType": "telegram",
     "conversationId": "6039959147",
-    "createdAt": "2026-02-04T18:02:14.158Z",
-    "lastActiveAt": "2026-02-04T18:05:01.313Z",
+    "createdAt": "2026-02-04T18:39:35.926Z",
+    "lastActiveAt": "2026-02-04T18:40:44.762Z",
     "messageCount": 6,
     "status": "active"
   }
