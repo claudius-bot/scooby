@@ -15,7 +15,7 @@
     "@scooby/core": "workspace:*",
     "@scooby/gateway": "workspace:*",
     "@scooby/schemas": "workspace:*",
-    "ai": "^4.1.0",
+    "ai": "^6.0.69",
     "dotenv": "^17.2.3"
   },
   "devDependencies": {
