@@ -1,4 +1,8 @@
 import { Bot, type Context } from 'grammy';
+import { writeFile, mkdir } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import type { ChannelAdapter, InboundMessage, OutboundMessage, MessageHandler } from '../types.js';
 
 export interface TelegramAdapterConfig {
@@ -35,6 +39,103 @@ export class TelegramAdapter implements ChannelAdapter {
         await handler(msg);
       }
     });
+
+    this.bot.on('message:voice', async (ctx: Context) => {
+      if (!ctx.message?.voice || !ctx.from) return;
+
+      const voice = ctx.message.voice;
+      try {
+        const localPath = await this.downloadTelegramFile(voice.file_id, 'ogg');
+
+        const msg: InboundMessage = {
+          channelType: 'telegram',
+          conversationId: String(ctx.chat!.id),
+          senderId: String(ctx.from.id),
+          senderName: [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(' '),
+          text: ctx.message.caption ?? '',
+          timestamp: new Date(ctx.message.date * 1000),
+          replyToMessageId: ctx.message.reply_to_message?.message_id
+            ? String(ctx.message.reply_to_message.message_id) : undefined,
+          attachments: [{
+            type: 'voice',
+            localPath,
+            mimeType: voice.mime_type ?? 'audio/ogg',
+            duration: voice.duration,
+          }],
+          raw: ctx.message,
+        };
+
+        for (const handler of this.handlers) {
+          await handler(msg);
+        }
+      } catch (err) {
+        console.error('[Telegram] Failed to download voice message:', err);
+      }
+    });
+
+    this.bot.on('message:audio', async (ctx: Context) => {
+      if (!ctx.message?.audio || !ctx.from) return;
+
+      const audio = ctx.message.audio;
+      const ext = this.extFromMime(audio.mime_type) ?? 'mp3';
+      try {
+        const localPath = await this.downloadTelegramFile(audio.file_id, ext);
+
+        const msg: InboundMessage = {
+          channelType: 'telegram',
+          conversationId: String(ctx.chat!.id),
+          senderId: String(ctx.from.id),
+          senderName: [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(' '),
+          text: ctx.message.caption ?? '',
+          timestamp: new Date(ctx.message.date * 1000),
+          replyToMessageId: ctx.message.reply_to_message?.message_id
+            ? String(ctx.message.reply_to_message.message_id) : undefined,
+          attachments: [{
+            type: 'audio',
+            localPath,
+            mimeType: audio.mime_type ?? 'audio/mpeg',
+            fileName: audio.file_name,
+            duration: audio.duration,
+          }],
+          raw: ctx.message,
+        };
+
+        for (const handler of this.handlers) {
+          await handler(msg);
+        }
+      } catch (err) {
+        console.error('[Telegram] Failed to download audio file:', err);
+      }
+    });
+  }
+
+  private async downloadTelegramFile(fileId: string, ext: string): Promise<string> {
+    const file = await this.bot.api.getFile(fileId);
+    if (!file.file_path) throw new Error('Telegram returned no file_path');
+
+    const url = `https://api.telegram.org/file/bot${this.config.botToken}/${file.file_path}`;
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`Failed to download file: ${response.status}`);
+
+    const dir = join(tmpdir(), 'scooby-audio');
+    await mkdir(dir, { recursive: true });
+    const localPath = join(dir, `${randomUUID()}.${ext}`);
+    const buffer = Buffer.from(await response.arrayBuffer());
+    await writeFile(localPath, buffer);
+    return localPath;
+  }
+
+  private extFromMime(mimeType?: string): string | undefined {
+    if (!mimeType) return undefined;
+    const map: Record<string, string> = {
+      'audio/mpeg': 'mp3',
+      'audio/mp4': 'm4a',
+      'audio/ogg': 'ogg',
+      'audio/flac': 'flac',
+      'audio/wav': 'wav',
+      'audio/x-wav': 'wav',
+    };
+    return map[mimeType];
   }
 
   async start(): Promise<void> {

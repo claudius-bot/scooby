@@ -1,9 +1,11 @@
 export interface Attachment {
-  type: 'photo' | 'document' | 'audio' | 'video' | 'sticker';
+  type: 'photo' | 'document' | 'audio' | 'video' | 'sticker' | 'voice';
   fileId?: string;
   url?: string;
   mimeType?: string;
   fileName?: string;
+  localPath?: string;
+  duration?: number;
 }
 
 export interface InboundMessage {

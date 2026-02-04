@@ -1,5 +1,6 @@
-import { resolve, dirname } from 'node:path';
+import { resolve, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { copyFile, mkdir, unlink } from 'node:fs/promises';
 import { config as loadEnv } from 'dotenv';
 import type { ModelMessage } from 'ai';
 import {
@@ -331,11 +332,33 @@ async function main() {
     const sessionMgr = sessionManagers.get(workspaceId)!;
     const session = await sessionMgr.getOrCreate(msg.channelType, msg.conversationId);
 
+    // Process voice/audio attachments
+    let messageContent = msg.text;
+    const audioAttachments = (msg.attachments ?? []).filter(
+      (a) => a.type === 'voice' || a.type === 'audio'
+    );
+
+    for (const attachment of audioAttachments) {
+      if (!attachment.localPath) continue;
+      try {
+        const audioDir = resolve(ws.path, 'data', 'audio');
+        await mkdir(audioDir, { recursive: true });
+        const fileName = basename(attachment.localPath);
+        const destPath = resolve(audioDir, fileName);
+        await copyFile(attachment.localPath, destPath);
+        // Clean up temp file
+        await unlink(attachment.localPath).catch(() => {});
+        messageContent += `\n[The user sent a voice message saved to data/audio/${fileName}. Use audio_transcribe tool with filePath "data/audio/${fileName}" to transcribe it, then respond to the transcribed text as if the user had typed it directly. Do not send back a transcribed version of the user's message, just respond like any other message.]`;
+      } catch (err) {
+        console.error(`[Scooby] Failed to process audio attachment:`, err);
+      }
+    }
+
     // Record user message
     await sessionMgr.appendTranscript(session.id, {
       timestamp: new Date().toISOString(),
       role: 'user',
-      content: msg.text,
+      content: messageContent,
     });
 
     // Get transcript for context
@@ -347,7 +370,7 @@ async function main() {
 
     // Get memory context
     const memService = memoryServices.get(workspaceId);
-    const memoryContext = memService ? await memService.getContextForPrompt(workspaceId, msg.text) : [];
+    const memoryContext = memService && msg.text ? await memService.getContextForPrompt(workspaceId, msg.text) : [];
 
     const toolCtx: ToolContext = {
       workspace: { id: ws.id, path: ws.path },

@@ -16,11 +16,13 @@ export type OutboundMessage = z.infer<typeof OutboundMessageSchema>;
  * Attachment on an inbound message.
  */
 export const AttachmentSchema = z.object({
-  type: z.enum(["photo", "document", "audio", "video", "sticker"]),
+  type: z.enum(["photo", "document", "audio", "video", "sticker", "voice"]),
   fileId: z.string().optional(),
   url: z.string().optional(),
   mimeType: z.string().optional(),
   fileName: z.string().optional(),
+  localPath: z.string().optional(),
+  duration: z.number().optional(),
 });
 
 export type Attachment = z.infer<typeof AttachmentSchema>;

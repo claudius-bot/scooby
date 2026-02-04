@@ -42,6 +42,11 @@ export class MessageQueue {
     const merged = entry.messages[entry.messages.length - 1];
     if (entry.messages.length > 1) {
       (merged as any).text = entry.messages.map(m => m.text).join('\n');
+      // Merge attachments from all messages
+      const allAttachments = entry.messages.flatMap(m => m.attachments ?? []);
+      if (allAttachments.length > 0) {
+        (merged as any).attachments = allAttachments;
+      }
     }
 
     try {
