@@ -26,6 +26,11 @@ export * from './automation/scheduler.js';
 export * from './automation/heartbeat.js';
 export * from './automation/webhooks.js';
 
+// Usage tracking
+export * from './usage/pricing.js';
+export * from './usage/tracker.js';
+export * from './usage/aggregator.js';
+
 // Tool implementations
 export { shellExecTool } from './tools/impl/shell-exec.js';
 export { fileReadTool } from './tools/impl/file-read.js';
@@ -36,3 +41,5 @@ export { sendMessageTool } from './tools/impl/send-message.js';
 export { memorySearchTool } from './tools/impl/memory-search.js';
 export { webSearchTool } from './tools/impl/web-search.js';
 export { webFetchTool } from './tools/impl/web-fetch.js';
+export { imageGenTool } from './tools/impl/image-gen.js';
+export { audioTranscribeTool } from './tools/impl/audio-transcribe.js';

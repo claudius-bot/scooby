@@ -15,7 +15,9 @@
   "dependencies": {
     "@ai-sdk/anthropic": "^1.1.0",
     "@ai-sdk/openai": "^1.1.0",
+    "@google/genai": "^1.0.0",
     "@mozilla/readability": "^0.6.0",
+    "@scooby/schemas": "workspace:*",
     "ai": "^4.1.0",
     "better-sqlite3": "^11.7.0",
     "cron": "^3.3.0",

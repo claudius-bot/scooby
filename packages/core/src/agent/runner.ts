@@ -10,6 +10,8 @@ import { getLanguageModel } from '../ai/provider.js';
 import { createEscalationState, shouldEscalate, recordToolCall, recordTokenUsage, escalate, type EscalationState } from '../ai/escalation.js';
 import { buildSystemPrompt, type PromptContext } from './prompt-builder.js';
 import { loadSkills } from './skills.js';
+import type { UsageTracker } from '../usage/tracker.js';
+import { estimateCost } from '../usage/pricing.js';
 
 export type AgentStreamEvent =
   | { type: 'text-delta'; content: string }
@@ -34,6 +36,9 @@ export interface AgentRunOptions {
     slow?: ModelCandidate[];
   };
   memoryContext?: string[];
+  usageTracker?: UsageTracker;
+  agentName?: string;
+  channelType?: string;
 }
 
 export class AgentRunner {
@@ -144,6 +149,32 @@ export class AgentRunner {
             modelGroup: currentGroup,
             tokenUsage: { prompt: totalPromptTokens, completion: totalCompletionTokens },
           },
+        });
+      }
+
+      // Record usage
+      if (options.usageTracker) {
+        const tokens = {
+          input: totalPromptTokens,
+          output: totalCompletionTokens,
+          total: totalPromptTokens + totalCompletionTokens,
+        };
+        const cost = estimateCost(
+          selection.candidate.provider,
+          selection.candidate.model,
+          tokens,
+        );
+        await options.usageTracker.record({
+          timestamp: new Date().toISOString(),
+          workspaceId: options.workspaceId,
+          sessionId: options.sessionId,
+          provider: selection.candidate.provider,
+          model: selection.candidate.model,
+          agentName: options.agentName ?? options.agent.name,
+          modelGroup: currentGroup,
+          tokens,
+          cost,
+          channelType: options.channelType,
         });
       }
 

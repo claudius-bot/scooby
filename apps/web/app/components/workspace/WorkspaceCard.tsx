@@ -19,7 +19,6 @@ export function WorkspaceCard({ workspace, onClick }: WorkspaceCardProps) {
       <h3 className="text-lg font-semibold text-gray-100 group-hover:text-white">
         {agent.name}
       </h3>
-      <p className="mt-1 text-sm text-gray-400">{agent.creature}</p>
       <p className="mt-2 text-xs text-gray-500">{agent.vibe}</p>
     </button>
   );

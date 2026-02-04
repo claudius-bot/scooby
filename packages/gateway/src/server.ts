@@ -1,8 +1,10 @@
-import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
+import type { Server } from 'node:http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { randomUUID } from 'node:crypto';
+import { Hono } from 'hono';
+import { serve, type ServerType } from '@hono/node-server';
 import { ConnectionManager } from './connections.js';
-import { createApiHandler, type ApiContext } from './api.js';
+import { createApi, type ApiContext } from './api.js';
 import { parseMessage, createResponse, createError, createEvent, type WsRequest } from './protocol.js';
 
 export interface GatewayConfig {
@@ -17,32 +19,32 @@ export type WsMethodHandler = (
 ) => Promise<unknown>;
 
 export class GatewayServer {
-  private server: Server;
-  private wss: WebSocketServer;
+  private server: Server | null = null;
+  private wss: WebSocketServer | null = null;
   private connections: ConnectionManager;
   private methodHandlers = new Map<string, WsMethodHandler>();
-  private apiHandler: ReturnType<typeof createApiHandler>;
+  private app: Hono;
 
   constructor(
     private config: GatewayConfig,
     apiContext: ApiContext,
   ) {
     this.connections = new ConnectionManager();
-    this.apiHandler = createApiHandler(apiContext);
 
-    this.server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-      const handled = await this.apiHandler(req, res);
-      if (!handled) {
-        res.writeHead(404, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Not found' }));
-      }
+    const api = createApi(apiContext);
+
+    this.app = new Hono();
+    this.app.route('/', api);
+
+    // Catch-all 404 for unmatched routes
+    this.app.notFound((c) => {
+      return c.json({ error: 'Not found' }, 404);
     });
-
-    this.wss = new WebSocketServer({ server: this.server, path: config.wsPath });
-    this.setupWebSocket();
   }
 
-  private setupWebSocket(): void {
+  private setupWebSocket(server: Server): void {
+    this.wss = new WebSocketServer({ server, path: this.config.wsPath });
+
     this.wss.on('connection', (ws: WebSocket) => {
       const connId = randomUUID();
       const conn = this.connections.add(connId, ws);
@@ -105,26 +107,48 @@ export class GatewayServer {
     return this.connections;
   }
 
+  getApp(): Hono {
+    return this.app;
+  }
+
   async start(): Promise<void> {
     return new Promise((resolve) => {
-      this.server.listen(this.config.port, this.config.host, () => {
-        console.log(`[Gateway] Server listening on ${this.config.host}:${this.config.port}`);
-        console.log(`[Gateway] WebSocket path: ${this.config.wsPath}`);
-        this.connections.startHeartbeat();
-        resolve();
-      });
+      const nodeServer = serve(
+        {
+          fetch: this.app.fetch,
+          port: this.config.port,
+          hostname: this.config.host,
+        },
+        (info) => {
+          console.log(`[Gateway] Server listening on ${this.config.host}:${info.port}`);
+          console.log(`[Gateway] WebSocket path: ${this.config.wsPath}`);
+          this.connections.startHeartbeat();
+          resolve();
+        },
+      );
+
+      this.server = nodeServer as Server;
+      this.setupWebSocket(this.server);
     });
   }
 
   async stop(): Promise<void> {
     this.connections.dispose();
     return new Promise((resolve, reject) => {
-      this.wss.close(() => {
-        this.server.close((err) => {
-          if (err) reject(err);
-          else resolve();
+      if (this.wss) {
+        this.wss.close(() => {
+          if (this.server) {
+            this.server.close((err) => {
+              if (err) reject(err);
+              else resolve();
+            });
+          } else {
+            resolve();
+          }
         });
-      });
+      } else {
+        resolve();
+      }
     });
   }
 }

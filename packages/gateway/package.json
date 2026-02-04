@@ -13,7 +13,10 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "@hono/node-server": "^1.19.9",
     "@scooby/core": "workspace:*",
+    "@scooby/schemas": "workspace:*",
+    "hono": "^4.11.7",
     "ws": "^8.18.0"
   },
   "devDependencies": {

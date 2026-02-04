@@ -32,18 +32,17 @@ async function safeRead(
 /**
  * Parse the IDENTITY.md file into the relevant AgentProfile fields.
  * The file is expected to have YAML frontmatter with keys:
- *   name, creature, vibe, emoji, avatar
+ *   name, vibe, emoji, avatar
  * and a markdown body that becomes the `identity` field.
  */
 async function loadIdentity(
   wsPath: string,
-): Promise<Pick<AgentProfile, "name" | "creature" | "vibe" | "emoji" | "avatar" | "identity">> {
+): Promise<Pick<AgentProfile, "name" | "vibe" | "emoji" | "avatar" | "identity">> {
   const raw = await safeRead(join(wsPath, "IDENTITY.md"));
 
   if (!raw) {
     return {
       name: "Scooby",
-      creature: "dog",
       vibe: "friendly",
       emoji: "\uD83D\uDC36",
       avatar: "",
@@ -55,7 +54,6 @@ async function loadIdentity(
 
   return {
     name: (data.name as string) ?? "Scooby",
-    creature: (data.creature as string) ?? "dog",
     vibe: (data.vibe as string) ?? "friendly",
     emoji: (data.emoji as string) ?? "\uD83D\uDC36",
     avatar: (data.avatar as string) ?? "",

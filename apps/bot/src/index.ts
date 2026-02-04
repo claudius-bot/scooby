@@ -17,6 +17,8 @@ import {
   CronScheduler,
   Heartbeat,
   WebhookManager,
+  UsageTracker,
+  loadUsageSummary,
   shellExecTool,
   fileReadTool,
   fileWriteTool,
@@ -26,6 +28,8 @@ import {
   memorySearchTool,
   webSearchTool,
   webFetchTool,
+  imageGenTool,
+  audioTranscribeTool,
 } from '@scooby/core';
 import {
   TelegramAdapter,
@@ -94,6 +98,12 @@ async function main() {
     sessionManagers.set(id, mgr);
   }
 
+  // 5b. Create usage trackers per workspace
+  const usageTrackers = new Map<string, UsageTracker>();
+  for (const [id, ws] of workspaces) {
+    usageTrackers.set(id, new UsageTracker(resolve(ws.path, 'data')));
+  }
+
   // 6. Create tool registry
   const toolRegistry = new ToolRegistry();
   toolRegistry.register(shellExecTool);
@@ -105,6 +115,8 @@ async function main() {
   toolRegistry.register(memorySearchTool);
   toolRegistry.register(webSearchTool);
   toolRegistry.register(webFetchTool);
+  toolRegistry.register(imageGenTool);
+  toolRegistry.register(audioTranscribeTool);
 
   // 7. Channel adapters
   const channelAdapters: ChannelAdapter[] = [];
@@ -152,7 +164,6 @@ async function main() {
           id: ws.id,
           agent: {
             name: ws.agent.name,
-            creature: ws.agent.creature,
             vibe: ws.agent.vibe,
             emoji: ws.agent.emoji,
             avatar: ws.agent.avatar,
@@ -176,6 +187,11 @@ async function main() {
       },
       handleWebhook: async (workspaceId: string, body: any) => {
         return webhookManager.handle(workspaceId, body);
+      },
+      getUsage: async (workspaceId: string, days?: number) => {
+        const ws = workspaces.get(workspaceId);
+        if (!ws) return { totals: {}, byModel: {}, byDay: {}, byAgent: {} };
+        return loadUsageSummary(resolve(ws.path, 'data'), { days });
       },
     },
   );
@@ -231,6 +247,9 @@ async function main() {
         slow: config.models.slow.candidates,
       },
       memoryContext,
+      usageTracker: usageTrackers.get(workspaceId),
+      agentName: ws.agent.name,
+      channelType: 'webchat',
     });
 
     // Process stream events and forward to WebSocket
@@ -271,7 +290,6 @@ async function main() {
         id: ws.id,
         agent: {
           name: ws.agent.name,
-          creature: ws.agent.creature,
           vibe: ws.agent.vibe,
           emoji: ws.agent.emoji,
           avatar: ws.agent.avatar,
@@ -346,6 +364,9 @@ async function main() {
         slow: config.models.slow.candidates,
       },
       memoryContext,
+      usageTracker: usageTrackers.get(workspaceId),
+      agentName: ws.agent.name,
+      channelType: msg.channelType,
     })) {
       if (event.type === 'done') {
         fullResponse = event.response;
@@ -400,6 +421,9 @@ async function main() {
         fast: config.models.fast.candidates,
         slow: config.models.slow.candidates,
       },
+      usageTracker: usageTrackers.get(job.workspace),
+      agentName: ws.agent.name,
+      channelType: 'cron',
     })) {
       // Consume stream
     }
@@ -455,6 +479,9 @@ async function main() {
         fast: config.models.fast.candidates,
         slow: config.models.slow.candidates,
       },
+      usageTracker: usageTrackers.get(workspaceId),
+      agentName: ws.agent.name,
+      channelType: 'webhook',
     })) {
       if (event.type === 'done') {
         response = event.response;

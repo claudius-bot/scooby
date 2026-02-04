@@ -4,7 +4,6 @@ interface AgentAvatarProps {
   agent: {
     name: string;
     emoji: string;
-    creature: string;
   };
   size?: 'sm' | 'md' | 'lg';
 }
@@ -19,7 +18,7 @@ export function AgentAvatar({ agent, size = 'sm' }: AgentAvatarProps) {
   return (
     <div
       className={`flex shrink-0 items-center justify-center rounded-full bg-gray-800 ${sizeClasses[size]}`}
-      title={`${agent.name} - ${agent.creature}`}
+      title={agent.name}
     >
       {agent.emoji}
     </div>

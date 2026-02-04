@@ -7,8 +7,6 @@ import type { WorkspaceConfig } from "../config/schema.js";
 export interface AgentProfile {
   /** Display name of the agent. */
   name: string;
-  /** What kind of creature the agent is (e.g. "dog", "cat", "parrot"). */
-  creature: string;
   /** Short personality / vibe description. */
   vibe: string;
   /** Single emoji that represents the agent. */

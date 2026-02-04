@@ -7,7 +7,6 @@ export interface WorkspaceInfo {
   id: string;
   agent: {
     name: string;
-    creature: string;
     vibe: string;
     emoji: string;
     avatar: string;
