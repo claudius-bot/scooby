@@ -8,7 +8,7 @@ import type {
   SkillDefinition,
 } from '@scooby/core';
 import type { UsageSummary } from '@scooby/schemas';
-import type { CommandResult, CommandContext } from './types.js';
+import type { CommandResult, CommandContext, WorkspaceInfo } from './types.js';
 import type { CommandRegistry } from './registry.js';
 import { parseCommand } from './parser.js';
 
@@ -28,6 +28,12 @@ export interface ProcessMessageOptions {
   getUsageSummary?: (days?: number) => Promise<UsageSummary>;
   getSkills?: () => Promise<SkillDefinition[]>;
   generateWorkspaceCode?: () => string;
+
+  // Workspace management
+  createWorkspace?: (name: string) => Promise<{ workspaceId: string; code: string }>;
+  getAccessibleWorkspaces?: () => Promise<WorkspaceInfo[]>;
+  switchWorkspace?: (workspaceId: string) => Promise<boolean>;
+  findWorkspaceByName?: (name: string) => string | undefined;
 }
 
 export interface CommandProcessorConfig {
@@ -78,6 +84,10 @@ export class CommandProcessor {
       getUsageSummary: opts.getUsageSummary,
       getSkills: opts.getSkills,
       generateWorkspaceCode: opts.generateWorkspaceCode,
+      createWorkspace: opts.createWorkspace,
+      getAccessibleWorkspaces: opts.getAccessibleWorkspaces,
+      switchWorkspace: opts.switchWorkspace,
+      findWorkspaceByName: opts.findWorkspaceByName,
     };
 
     // Execute the command

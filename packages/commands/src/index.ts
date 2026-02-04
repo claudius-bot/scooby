@@ -5,6 +5,8 @@ export * from './parser.js';
 export * from './registry.js';
 export * from './processor.js';
 export * from './code-manager.js';
+export * from './channel-access.js';
+export * from './workspace-manager.js';
 
 // Re-export handler creators
 export {
@@ -16,6 +18,8 @@ export {
   createUsageCommand,
   createSkillCommand,
   createGenCodeCommand,
+  createNewWorkspaceCommand,
+  createSwitchCommand,
 } from './handlers/index.js';
 
 import { CommandRegistry } from './registry.js';
@@ -28,6 +32,8 @@ import {
   createUsageCommand,
   createSkillCommand,
   createGenCodeCommand,
+  createNewWorkspaceCommand,
+  createSwitchCommand,
 } from './handlers/index.js';
 
 /**
@@ -45,6 +51,8 @@ export function createDefaultRegistry(): CommandRegistry {
   registry.register(createUsageCommand());
   registry.register(createSkillCommand());
   registry.register(createGenCodeCommand());
+  registry.register(createNewWorkspaceCommand());
+  registry.register(createSwitchCommand());
 
   // Help command needs registry to list commands
   registry.register(createHelpCommand(registry));
