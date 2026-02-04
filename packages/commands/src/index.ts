@@ -4,6 +4,7 @@ export * from './types.js';
 export * from './parser.js';
 export * from './registry.js';
 export * from './processor.js';
+export * from './code-manager.js';
 
 // Re-export handler creators
 export {
@@ -14,6 +15,7 @@ export {
   createStopCommand,
   createUsageCommand,
   createSkillCommand,
+  createGenCodeCommand,
 } from './handlers/index.js';
 
 import { CommandRegistry } from './registry.js';
@@ -25,6 +27,7 @@ import {
   createStopCommand,
   createUsageCommand,
   createSkillCommand,
+  createGenCodeCommand,
 } from './handlers/index.js';
 
 /**
@@ -41,6 +44,7 @@ export function createDefaultRegistry(): CommandRegistry {
   registry.register(createStopCommand());
   registry.register(createUsageCommand());
   registry.register(createSkillCommand());
+  registry.register(createGenCodeCommand());
 
   // Help command needs registry to list commands
   registry.register(createHelpCommand(registry));

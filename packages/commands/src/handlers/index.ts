@@ -5,3 +5,4 @@ export { createModelCommand } from './model.js';
 export { createStopCommand } from './stop.js';
 export { createUsageCommand } from './usage.js';
 export { createSkillCommand } from './skill.js';
+export { createGenCodeCommand } from './gen-code.js';

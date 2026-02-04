@@ -40,6 +40,7 @@ export interface CommandContext {
   stopRunningAgent?: () => boolean;
   getUsageSummary?: (days?: number) => Promise<UsageSummary>;
   getSkills?: () => Promise<SkillDefinition[]>;
+  generateWorkspaceCode?: () => string;
 }
 
 /**

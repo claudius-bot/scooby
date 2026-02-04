@@ -27,6 +27,7 @@ export interface ProcessMessageOptions {
   stopRunningAgent?: () => boolean;
   getUsageSummary?: (days?: number) => Promise<UsageSummary>;
   getSkills?: () => Promise<SkillDefinition[]>;
+  generateWorkspaceCode?: () => string;
 }
 
 export interface CommandProcessorConfig {
@@ -76,6 +77,7 @@ export class CommandProcessor {
       stopRunningAgent: opts.stopRunningAgent,
       getUsageSummary: opts.getUsageSummary,
       getSkills: opts.getSkills,
+      generateWorkspaceCode: opts.generateWorkspaceCode,
     };
 
     // Execute the command

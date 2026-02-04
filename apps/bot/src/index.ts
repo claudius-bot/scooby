@@ -42,7 +42,7 @@ import {
   type ChannelAdapter,
 } from '@scooby/channels';
 import { GatewayServer } from '@scooby/gateway';
-import { CommandProcessor, createDefaultRegistry } from '@scooby/commands';
+import { CommandProcessor, createDefaultRegistry, CodeManager } from '@scooby/commands';
 import { MessageRouter } from './router.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -128,12 +128,13 @@ async function main() {
   toolRegistry.register(imageGenTool);
   toolRegistry.register(audioTranscribeTool);
 
-  // 6b. Create command processor
+  // 6b. Create command processor and code manager
   const commandRegistry = createDefaultRegistry();
   const commandProcessor = new CommandProcessor({
     registry: commandRegistry,
     config,
   });
+  const codeManager = new CodeManager();
   console.log('[Scooby] Command processor initialized');
 
   // 7. Channel adapters
@@ -157,6 +158,8 @@ async function main() {
 
   // 8. Message router
   const router = new MessageRouter(config);
+  router.setBindingsPath(resolve(configDir, 'data', 'channel-bindings.json'));
+  await router.loadBindings();
 
   // 9. Send message function for tools
   const sendMessage = async (channelType: string, msg: OutboundMessage) => {
@@ -256,6 +259,9 @@ async function main() {
       },
       getSkills: async () => {
         return loadSkills(ws.path);
+      },
+      generateWorkspaceCode: () => {
+        return codeManager.generate(workspaceId);
       },
     });
 
@@ -363,6 +369,54 @@ async function main() {
   // 11. Message handler for channel adapters
   const messageQueue = new MessageQueue({ debounceMs: 500 });
   messageQueue.onFlush(async (msg: InboundMessage) => {
+    const adapter = channelAdapters.find((a) => a.type === msg.channelType);
+
+    // Check if this channel has an explicit binding
+    const hasExplicitBinding = router.hasExplicitBinding(msg.channelType, msg.conversationId);
+
+    // If no explicit binding, check if message is a workspace code
+    if (!hasExplicitBinding) {
+      const trimmedText = msg.text.trim();
+
+      // Check if message is a 6-digit code
+      if (/^\d{6}$/.test(trimmedText)) {
+        const workspaceId = codeManager.validate(trimmedText);
+        if (workspaceId) {
+          // Valid code - bind channel to workspace
+          await router.bindChannel(msg.channelType, msg.conversationId, workspaceId);
+          const ws = workspaces.get(workspaceId);
+          if (adapter && ws) {
+            await adapter.send({
+              conversationId: msg.conversationId,
+              text: `Connected to workspace "${ws.agent.name}" ${ws.agent.emoji}. You can now start chatting!`,
+              format: 'text',
+            });
+          }
+          return;
+        } else {
+          // Invalid or expired code
+          if (adapter) {
+            await adapter.send({
+              conversationId: msg.conversationId,
+              text: 'Invalid or expired code. Please request a new code from an existing channel using /gen-code.',
+              format: 'text',
+            });
+          }
+          return;
+        }
+      }
+
+      // Not a code - prompt for one
+      if (adapter) {
+        await adapter.send({
+          conversationId: msg.conversationId,
+          text: 'This channel is not connected to a workspace. Please enter a 6-digit workspace code to connect.\n\nYou can generate a code from an existing channel using /gen-code.',
+          format: 'text',
+        });
+      }
+      return;
+    }
+
     const route = router.route(msg);
     if (!route) {
       console.warn(`[Scooby] No route for message from ${msg.channelType}:${msg.conversationId}`);
@@ -380,7 +434,6 @@ async function main() {
     const session = await sessionMgr.getOrCreate(msg.channelType, msg.conversationId);
 
     // Try to handle as a slash command
-    const adapter = channelAdapters.find((a) => a.type === msg.channelType);
     const cmdResult = await commandProcessor.tryHandle({
       message: msg,
       workspace: ws,
@@ -405,6 +458,9 @@ async function main() {
       },
       getSkills: async () => {
         return loadSkills(ws.path);
+      },
+      generateWorkspaceCode: () => {
+        return codeManager.generate(workspaceId);
       },
     });
 
