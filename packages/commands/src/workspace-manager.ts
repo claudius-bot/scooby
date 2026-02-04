@@ -6,10 +6,6 @@ export interface DynamicWorkspaceInfo {
   name: string;
   path: string;
   createdAt: string;
-  createdBy?: {
-    channelType: string;
-    conversationId: string;
-  };
 }
 
 /**
@@ -69,10 +65,7 @@ export class WorkspaceManager {
    * Create a new workspace with the given name.
    * Returns the workspace info.
    */
-  async createWorkspace(
-    name: string,
-    createdBy?: { channelType: string; conversationId: string }
-  ): Promise<DynamicWorkspaceInfo> {
+  async createWorkspace(name: string): Promise<DynamicWorkspaceInfo> {
     // Generate a URL-safe ID from the name
     const baseId = name
       .toLowerCase()
@@ -97,7 +90,6 @@ export class WorkspaceManager {
       name,
       path: workspacePath,
       createdAt: new Date().toISOString(),
-      createdBy,
     };
 
     this.workspaces.set(id, info);

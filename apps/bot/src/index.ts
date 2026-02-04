@@ -155,7 +155,8 @@ async function main() {
 
   // Load any dynamic workspaces that were created previously
   for (const info of workspaceManager.listWorkspaces()) {
-    if (!workspaces.has(info.id)) {
+    if (workspaces.has(info.id)) continue;
+
       try {
         const ws = await loadWorkspace({ id: info.id, path: info.path }, configDir);
         workspaces.set(ws.id, ws);
@@ -174,7 +175,7 @@ async function main() {
       } catch (err) {
         console.error(`[Scooby] Failed to load dynamic workspace ${info.id}:`, err);
       }
-    }
+    
   }
 
   // Helper to initialize a newly created workspace
@@ -323,10 +324,7 @@ async function main() {
         return codeManager.generate(workspaceId);
       },
       createWorkspace: async (name: string) => {
-        const info = await workspaceManager.createWorkspace(name, {
-          channelType: 'webchat',
-          conversationId: connectionId,
-        });
+        const info = await workspaceManager.createWorkspace(name);
         await initializeWorkspace(info.id, info.path);
         const code = codeManager.generate(info.id);
         return { workspaceId: info.id, code };
@@ -568,10 +566,7 @@ async function main() {
         return codeManager.generate(workspaceId);
       },
       createWorkspace: async (name: string) => {
-        const info = await workspaceManager.createWorkspace(name, {
-          channelType: msg.channelType,
-          conversationId: msg.conversationId,
-        });
+        const info = await workspaceManager.createWorkspace(name);
         await initializeWorkspace(info.id, info.path);
         const code = codeManager.generate(info.id);
         return { workspaceId: info.id, code };
