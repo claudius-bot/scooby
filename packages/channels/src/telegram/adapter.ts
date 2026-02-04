@@ -52,13 +52,14 @@ export class TelegramAdapter implements ChannelAdapter {
 
   async send(message: OutboundMessage): Promise<void> {
     const chatId = Number(message.conversationId);
-    const text = message.text;
+    const useMarkdown = message.format === 'markdown';
+    const text = useMarkdown ? escapeMarkdownV2(message.text) : message.text;
 
     // Telegram has 4096 char limit per message
     const MAX_LEN = 4096;
     if (text.length <= MAX_LEN) {
       await this.bot.api.sendMessage(chatId, text, {
-        parse_mode: message.format === 'markdown' ? 'MarkdownV2' : undefined,
+        parse_mode: useMarkdown ? 'MarkdownV2' : undefined,
         reply_to_message_id: message.replyToMessageId ? Number(message.replyToMessageId) : undefined,
       });
     } else {
@@ -66,7 +67,7 @@ export class TelegramAdapter implements ChannelAdapter {
       const chunks = this.splitMessage(text, MAX_LEN);
       for (const chunk of chunks) {
         await this.bot.api.sendMessage(chatId, chunk, {
-          parse_mode: message.format === 'markdown' ? 'MarkdownV2' : undefined,
+          parse_mode: useMarkdown ? 'MarkdownV2' : undefined,
         });
       }
     }
@@ -92,4 +93,29 @@ export class TelegramAdapter implements ChannelAdapter {
     }
     return chunks;
   }
+}
+
+/**
+ * Escape text for Telegram MarkdownV2 format.
+ *
+ * MarkdownV2 requires these characters to be escaped with a preceding backslash
+ * when they appear outside of formatting entities:
+ *   _ * [ ] ( ) ~ ` > # + - = | { } . !
+ *
+ * The agent produces standard markdown, so we escape everything outside of
+ * code blocks (``` ... ```) and inline code (` ... `), which Telegram renders
+ * literally and where escaping would be visible.
+ */
+function escapeMarkdownV2(text: string): string {
+  // Split on code fences and inline code to avoid escaping inside them.
+  // Matches triple-backtick blocks first, then single-backtick spans.
+  const parts = text.split(/(```[\s\S]*?```|`[^`]*`)/);
+  return parts
+    .map((part, i) => {
+      // Odd indices are the captured code blocks/spans — leave them alone
+      if (i % 2 === 1) return part;
+      // Even indices are regular text — escape reserved characters
+      return part.replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, '\\$1');
+    })
+    .join('');
 }
