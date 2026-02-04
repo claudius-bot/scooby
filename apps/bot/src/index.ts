@@ -1,7 +1,7 @@
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config as loadEnv } from 'dotenv';
-import type { CoreMessage } from 'ai';
+import type { ModelMessage } from 'ai';
 import {
   loadConfig,
   loadWorkspace,
@@ -10,6 +10,7 @@ import {
   ToolRegistry,
   type ToolContext,
   type OutboundMessage,
+  setAiGatewayConfig,
   SessionManager,
   AgentRunner,
   CooldownTracker,
@@ -53,6 +54,12 @@ async function main() {
   const configPath = resolve(__dirname, '..', '..', '..', 'scooby.config.json5');
   const config = await loadConfig(configPath);
   console.log(`[Scooby] Config loaded from ${configPath}`);
+
+  // 1b. Configure AI Gateway if present
+  if (config.aiGateway) {
+    setAiGatewayConfig(config.aiGateway);
+    console.log('[Scooby] AI Gateway configured');
+  }
 
   // 2. Load workspaces
   const workspaces = new Map<string, Workspace>();
@@ -221,7 +228,7 @@ async function main() {
     const messages = transcript.map((t) => ({
       role: t.role,
       content: t.content,
-    })) as CoreMessage[];
+    })) as ModelMessage[];
 
     // Get memory context
     const memService = memoryServices.get(workspaceId);
@@ -336,7 +343,7 @@ async function main() {
     const messages = transcript.map((t) => ({
       role: t.role,
       content: t.content,
-    })) as CoreMessage[];
+    })) as ModelMessage[];
 
     // Get memory context
     const memService = memoryServices.get(workspaceId);

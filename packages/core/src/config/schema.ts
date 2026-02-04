@@ -22,6 +22,8 @@ export {
   type CronEntry,
   HeartbeatSettingsSchema,
   type HeartbeatSettings,
+  AiGatewayConfigSchema,
+  type AiGatewayConfig,
   ScoobyConfigSchema,
   type ScoobyConfig,
 } from "@scooby/schemas";

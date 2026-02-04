@@ -24,7 +24,7 @@ export class ToolRegistry {
       if (!checkToolPermission(name, ctx.permissions)) continue;
       result[name] = tool({
         description: def.description,
-        parameters: def.inputSchema,
+        inputSchema: def.inputSchema,
         execute: async (input) => def.execute(input, ctx),
       });
     }

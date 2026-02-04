@@ -1,4 +1,4 @@
-import { streamText, generateText, type LanguageModelV1, type CoreMessage } from 'ai';
+import { streamText, generateText, stepCountIs, type ModelMessage, type LanguageModel } from 'ai';
 import { CooldownTracker } from './model-group.js';
 
 // ── Error classification ────────────────────────────────────────────────
@@ -56,16 +56,16 @@ const COOLDOWN_DURATIONS: Record<ErrorCategory, number> = {
 // ── Failover options ────────────────────────────────────────────────────
 
 export interface FailoverCandidate {
-  model: LanguageModelV1;
+  model: LanguageModel;
   candidate: { provider: string; model: string; maxTokens?: number };
 }
 
 export interface FailoverOptions {
   candidates: FailoverCandidate[];
-  messages: CoreMessage[];
+  messages: ModelMessage[];
   system?: string;
   tools?: Record<string, unknown>;
-  maxSteps?: number;
+  stopWhenStepCount?: number;
   onModelSwitch?: (from: string, to: string, reason: string) => void;
   cooldowns: CooldownTracker;
 }
@@ -84,7 +84,7 @@ function candidateLabel(c: FailoverCandidate): string {
  * next candidate is tried.  Non-retryable errors are re-thrown immediately.
  */
 export async function generateWithFailover(options: FailoverOptions): Promise<Awaited<ReturnType<typeof generateText>>> {
-  const { candidates, messages, system, tools, maxSteps, onModelSwitch, cooldowns } = options;
+  const { candidates, messages, system, tools, stopWhenStepCount, onModelSwitch, cooldowns } = options;
 
   let lastError: unknown;
 
@@ -96,8 +96,8 @@ export async function generateWithFailover(options: FailoverOptions): Promise<Aw
         messages,
         system,
         tools: tools as Parameters<typeof generateText>[0]['tools'],
-        maxSteps,
-        ...(current.candidate.maxTokens ? { maxTokens: current.candidate.maxTokens } : {}),
+        ...(stopWhenStepCount ? { stopWhen: stepCountIs(stopWhenStepCount) } : {}),
+        ...(current.candidate.maxTokens ? { maxOutputTokens: current.candidate.maxTokens } : {}),
       });
       return result;
     } catch (err) {
@@ -133,7 +133,7 @@ export async function generateWithFailover(options: FailoverOptions): Promise<Aw
  * next candidate.
  */
 export async function streamWithFailover(options: FailoverOptions): Promise<Awaited<ReturnType<typeof streamText>>> {
-  const { candidates, messages, system, tools, maxSteps, onModelSwitch, cooldowns } = options;
+  const { candidates, messages, system, tools, stopWhenStepCount, onModelSwitch, cooldowns } = options;
 
   let lastError: unknown;
 
@@ -145,8 +145,8 @@ export async function streamWithFailover(options: FailoverOptions): Promise<Awai
         messages,
         system,
         tools: tools as Parameters<typeof streamText>[0]['tools'],
-        maxSteps,
-        ...(current.candidate.maxTokens ? { maxTokens: current.candidate.maxTokens } : {}),
+        ...(stopWhenStepCount ? { stopWhen: stepCountIs(stopWhenStepCount) } : {}),
+        ...(current.candidate.maxTokens ? { maxOutputTokens: current.candidate.maxTokens } : {}),
       });
 
       // Await the first chunk to verify the stream is alive.  If the

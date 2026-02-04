@@ -99,12 +99,21 @@ export const HeartbeatSettingsSchema = z.object({
 
 export type HeartbeatSettings = z.infer<typeof HeartbeatSettingsSchema>;
 
+// ── AI Gateway (Vercel) ─────────────────────────────────────────────
+export const AiGatewayConfigSchema = z.object({
+  apiKey: z.string().optional(),
+  baseURL: z.string().optional(),
+});
+
+export type AiGatewayConfig = z.infer<typeof AiGatewayConfigSchema>;
+
 // ── Root config ──────────────────────────────────────────────────────
 export const ScoobyConfigSchema = z.object({
   models: ModelsConfigSchema,
   workspaces: z.array(WorkspaceConfigSchema),
   channels: ChannelsConfigSchema.optional(),
   gateway: GatewayConfigSchema.optional(),
+  aiGateway: AiGatewayConfigSchema.optional(),
   session: SessionConfigSchema.optional(),
   cron: z.array(CronEntrySchema).optional(),
   heartbeat: HeartbeatSettingsSchema.optional(),

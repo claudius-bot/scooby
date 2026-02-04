@@ -1,4 +1,4 @@
-import { streamText, type CoreMessage, type LanguageModelV1 } from 'ai';
+import { streamText, stepCountIs, type ModelMessage } from 'ai';
 import type { ToolRegistry } from '../tools/registry.js';
 import type { ToolContext } from '../tools/types.js';
 import type { SessionManager } from '../session/manager.js';
@@ -21,7 +21,7 @@ export type AgentStreamEvent =
   | { type: 'done'; response: string; usage: { promptTokens: number; completionTokens: number } };
 
 export interface AgentRunOptions {
-  messages: CoreMessage[];
+  messages: ModelMessage[];
   workspaceId: string;
   workspacePath: string;
   agent: import('../workspace/types.js').AgentProfile;
@@ -102,7 +102,7 @@ export class AgentRunner {
         system: systemPrompt,
         messages: options.messages,
         tools: aiTools,
-        maxSteps: 10,
+        stopWhen: stepCountIs(10),
         onStepFinish: async (step) => {
           // Record tool calls for escalation tracking
           if (step.toolCalls && step.toolCalls.length > 0) {
@@ -112,9 +112,9 @@ export class AgentRunner {
           }
           // Record token usage
           if (step.usage) {
-            escState = recordTokenUsage(escState, step.usage.promptTokens + step.usage.completionTokens);
-            totalPromptTokens += step.usage.promptTokens;
-            totalCompletionTokens += step.usage.completionTokens;
+            escState = recordTokenUsage(escState, (step.usage.inputTokens ?? 0) + (step.usage.outputTokens ?? 0));
+            totalPromptTokens += step.usage.inputTokens ?? 0;
+            totalCompletionTokens += step.usage.outputTokens ?? 0;
           }
         },
       });
@@ -122,18 +122,18 @@ export class AgentRunner {
       for await (const part of result.fullStream) {
         switch (part.type) {
           case 'text-delta':
-            fullResponse += part.textDelta;
-            yield { type: 'text-delta', content: part.textDelta };
+            fullResponse += part.text;
+            yield { type: 'text-delta', content: part.text };
             break;
           case 'tool-call':
-            yield { type: 'tool-call', toolName: part.toolName, args: part.args };
+            yield { type: 'tool-call', toolName: part.toolName, args: part.input };
             // Check if this tool requests slow model
             if (slowTools.includes(part.toolName) && currentGroup === 'fast') {
               escState = escalate(escState, `Tool ${part.toolName} requests slow model`);
             }
             break;
           case 'tool-result':
-            yield { type: 'tool-result', toolName: part.toolName, result: typeof part.result === 'string' ? part.result : JSON.stringify(part.result) };
+            yield { type: 'tool-result', toolName: part.toolName, result: typeof part.output === 'string' ? part.output : JSON.stringify(part.output) };
             break;
         }
       }

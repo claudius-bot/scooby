@@ -1,11 +1,11 @@
-import type { LanguageModelV1 } from 'ai';
+import type { LanguageModel } from 'ai';
 import type { ModelCandidate } from '../config/schema.js';
 import { getLanguageModel } from './provider.js';
 
 export type ModelGroup = 'fast' | 'slow';
 
 export interface ModelSelection {
-  model: LanguageModelV1;
+  model: LanguageModel;
   candidate: ModelCandidate;
   group: ModelGroup;
 }
