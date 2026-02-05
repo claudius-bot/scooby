@@ -43,4 +43,16 @@ export { webSearchTool } from './tools/impl/web-search.js';
 export { webFetchTool } from './tools/impl/web-fetch.js';
 export { imageGenTool } from './tools/impl/image-gen.js';
 export { audioTranscribeTool } from './tools/impl/audio-transcribe.js';
-export { ttsTool } from './tools/impl/tts.js';
+export {
+  ttsTool,
+  generateTts,
+  resolveProvider as resolveTtsProvider,
+  isProviderConfigured as isTtsProviderConfigured,
+  createTtsCaption,
+  TTS_MAX_TEXT_LENGTH,
+  OPENAI_TTS_VOICES,
+  OPENAI_TTS_MODELS,
+  type TtsResult,
+  type TtsOptions,
+  type TtsProvider,
+} from './tools/impl/tts.js';
