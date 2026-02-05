@@ -1,4 +1,5 @@
-import type { ChannelAdapter, InboundMessage, OutboundMessage, MessageHandler } from '../types.js';
+import { readFile } from 'node:fs/promises';
+import type { ChannelAdapter, InboundMessage, OutboundMessage, OutboundAttachment, MessageHandler } from '../types.js';
 
 export interface WebChatConnection {
   id: string;
@@ -26,14 +27,45 @@ export class WebChatAdapter implements ChannelAdapter {
       console.warn(`[WebChat] No connection for conversation ${message.conversationId}`);
       return;
     }
+
+    // Prepare attachments with base64 data if they only have localPath
+    const attachments = message.attachments
+      ? await Promise.all(message.attachments.map(a => this.prepareAttachment(a)))
+      : undefined;
+
     conn.send({
       event: 'chat.message',
       data: {
         conversationId: message.conversationId,
         text: message.text,
         format: message.format ?? 'text',
+        attachments,
       },
     });
+  }
+
+  private async prepareAttachment(attachment: OutboundAttachment): Promise<{
+    type: string;
+    data?: string;
+    mimeType?: string;
+    fileName?: string;
+    caption?: string;
+  }> {
+    let data = attachment.data;
+
+    // If we have a local path but no base64 data, read the file
+    if (!data && attachment.localPath) {
+      const buffer = await readFile(attachment.localPath);
+      data = buffer.toString('base64');
+    }
+
+    return {
+      type: attachment.type,
+      data,
+      mimeType: attachment.mimeType,
+      fileName: attachment.fileName,
+      caption: attachment.caption,
+    };
   }
 
   onMessage(handler: MessageHandler): void {

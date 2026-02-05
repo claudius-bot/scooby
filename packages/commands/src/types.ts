@@ -1,4 +1,4 @@
-import type { InboundMessage } from '@scooby/channels';
+import type { InboundMessage, OutboundAttachment } from '@scooby/channels';
 import type {
   Workspace,
   SessionMetadata,
@@ -47,6 +47,7 @@ export interface CommandContext {
 
   // Functions
   sendReply: (text: string, format?: 'text' | 'markdown') => Promise<void>;
+  sendAttachment?: (attachment: OutboundAttachment) => Promise<void>;
   getRunningAgent?: () => AbortController | null;
   stopRunningAgent?: () => boolean;
   getUsageSummary?: (days?: number) => Promise<UsageSummary>;

@@ -20,6 +20,8 @@ export {
   createGenCodeCommand,
   createNewWorkspaceCommand,
   createSwitchCommand,
+  createTtsCommand,
+  createImageCommand,
 } from './handlers/index.js';
 
 import { CommandRegistry } from './registry.js';
@@ -34,6 +36,8 @@ import {
   createGenCodeCommand,
   createNewWorkspaceCommand,
   createSwitchCommand,
+  createTtsCommand,
+  createImageCommand,
 } from './handlers/index.js';
 
 /**
@@ -53,6 +57,8 @@ export function createDefaultRegistry(): CommandRegistry {
   registry.register(createGenCodeCommand());
   registry.register(createNewWorkspaceCommand());
   registry.register(createSwitchCommand());
+  registry.register(createTtsCommand());
+  registry.register(createImageCommand());
 
   // Help command needs registry to list commands
   registry.register(createHelpCommand(registry));

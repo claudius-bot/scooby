@@ -32,6 +32,7 @@ import {
   webFetchTool,
   imageGenTool,
   audioTranscribeTool,
+  ttsTool,
   loadSkills,
 } from '@scooby/core';
 import {
@@ -134,6 +135,7 @@ async function main() {
   toolRegistry.register(webFetchTool);
   toolRegistry.register(imageGenTool);
   toolRegistry.register(audioTranscribeTool);
+  toolRegistry.register(ttsTool);
 
   // 6b. Create command processor, code manager, and workspace management
   const commandRegistry = createDefaultRegistry();
@@ -314,6 +316,13 @@ async function main() {
           usage: { promptTokens: 0, completionTokens: 0 },
         });
       },
+      sendAttachment: async (attachment) => {
+        await webChatAdapter.send({
+          conversationId: connectionId,
+          text: attachment.caption ?? '',
+          attachments: [attachment],
+        });
+      },
       getUsageSummary: async (days?: number) => {
         return loadUsageSummary(resolve(ws.path, 'data'), { days });
       },
@@ -387,6 +396,10 @@ async function main() {
       workspace: { id: ws.id, path: ws.path },
       session: { id: session.id, workspaceId },
       permissions: ws.permissions,
+      conversation: {
+        channelType: 'webchat',
+        conversationId: connectionId,
+      },
       sendMessage,
     };
 
@@ -549,6 +562,15 @@ async function main() {
           });
         }
       },
+      sendAttachment: async (attachment) => {
+        if (adapter) {
+          await adapter.send({
+            conversationId: msg.conversationId,
+            text: attachment.caption ?? '',
+            attachments: [attachment],
+          });
+        }
+      },
       getUsageSummary: async (days?: number) => {
         return loadUsageSummary(resolve(ws.path, 'data'), { days });
       },
@@ -635,6 +657,32 @@ async function main() {
       }
     }
 
+    // Process photo attachments
+    const photoAttachments = (msg.attachments ?? []).filter(
+      (a) => a.type === 'photo'
+    );
+
+    for (const attachment of photoAttachments) {
+      if (!attachment.localPath) continue;
+      try {
+        const imagesDir = resolve(ws.path, 'data', 'images');
+        await mkdir(imagesDir, { recursive: true });
+        const fileName = basename(attachment.localPath);
+        const destPath = resolve(imagesDir, fileName);
+        await copyFile(attachment.localPath, destPath);
+        // Clean up temp file
+        await unlink(attachment.localPath).catch(() => {});
+        const caption = msg.text.trim();
+        if (caption) {
+          messageContent = `[The user sent an image with the following caption/instruction: "${caption}"]\n\nThe image has been saved to data/images/${fileName}. Use the image_gen tool with this image as an input (using localPath "data/images/${fileName}") and the caption as the prompt to generate a modified image based on their request. Send the resulting image back to the user.`;
+        } else {
+          messageContent += `\n[The user sent an image saved to data/images/${fileName}. If they're asking for image modifications, use the image_gen tool with inputImages containing localPath "data/images/${fileName}" to process it.]`;
+        }
+      } catch (err) {
+        console.error(`[Scooby] Failed to process photo attachment:`, err);
+      }
+    }
+
     // Record user message
     await sessionMgr.appendTranscript(session.id, {
       timestamp: new Date().toISOString(),
@@ -657,6 +705,10 @@ async function main() {
       workspace: { id: ws.id, path: ws.path },
       session: { id: session.id, workspaceId },
       permissions: ws.permissions,
+      conversation: {
+        channelType: msg.channelType,
+        conversationId: msg.conversationId,
+      },
       sendMessage,
     };
 

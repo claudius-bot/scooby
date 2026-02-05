@@ -1,6 +1,20 @@
 import { z } from "zod";
 
 /**
+ * Attachment on an outbound message.
+ */
+export const OutboundAttachmentSchema = z.object({
+  type: z.enum(["photo", "document", "audio", "video"]),
+  localPath: z.string().optional(),
+  data: z.string().optional(), // base64 encoded
+  mimeType: z.string().optional(),
+  fileName: z.string().optional(),
+  caption: z.string().optional(),
+});
+
+export type OutboundAttachment = z.infer<typeof OutboundAttachmentSchema>;
+
+/**
  * A message sent from the agent / system to a channel.
  */
 export const OutboundMessageSchema = z.object({
@@ -8,6 +22,7 @@ export const OutboundMessageSchema = z.object({
   text: z.string(),
   replyToMessageId: z.string().optional(),
   format: z.enum(["text", "markdown"]).optional(),
+  attachments: z.array(OutboundAttachmentSchema).optional(),
 });
 
 export type OutboundMessage = z.infer<typeof OutboundMessageSchema>;

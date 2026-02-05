@@ -20,11 +20,21 @@ export interface InboundMessage {
   raw?: unknown;
 }
 
+export interface OutboundAttachment {
+  type: 'photo' | 'document' | 'audio' | 'video';
+  localPath?: string;
+  data?: string; // base64 encoded
+  mimeType?: string;
+  fileName?: string;
+  caption?: string;
+}
+
 export interface OutboundMessage {
   conversationId: string;
   text: string;
   replyToMessageId?: string;
   format?: 'text' | 'markdown';
+  attachments?: OutboundAttachment[];
 }
 
 export type MessageHandler = (msg: InboundMessage) => Promise<void>;

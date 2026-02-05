@@ -8,3 +8,5 @@ export { createSkillCommand } from './skill.js';
 export { createGenCodeCommand } from './gen-code.js';
 export { createNewWorkspaceCommand } from './new-workspace.js';
 export { createSwitchCommand } from './switch.js';
+export { createTtsCommand } from './tts.js';
+export { createImageCommand } from './image.js';
