@@ -37,7 +37,7 @@ async function safeRead(
  */
 async function loadIdentity(
   wsPath: string,
-): Promise<Pick<AgentProfile, "name" | "vibe" | "emoji" | "avatar" | "identity">> {
+): Promise<Pick<AgentProfile, "name" | "vibe" | "emoji" | "avatar" | "identity" | "configured">> {
   const raw = await safeRead(join(wsPath, "IDENTITY.md"));
 
   if (!raw) {
@@ -47,6 +47,7 @@ async function loadIdentity(
       emoji: "\uD83D\uDC36",
       avatar: "",
       identity: "",
+      configured: true, // Default to true for backward compatibility
     };
   }
 
@@ -58,6 +59,7 @@ async function loadIdentity(
     emoji: (data.emoji as string) ?? "\uD83D\uDC36",
     avatar: (data.avatar as string) ?? "",
     identity: content.trim(),
+    configured: data.configured !== false, // Default true unless explicitly false
   };
 }
 
@@ -113,11 +115,13 @@ export async function loadWorkspace(
   await ensureSubdirs(absolutePath);
 
   // Load agent profile files in parallel.
-  const [identityFields, soul, tools, bootstrap] = await Promise.all([
+  const [identityFields, soul, tools, bootstrap, welcomeContext, scratchpad] = await Promise.all([
     loadIdentity(absolutePath),
     safeRead(join(absolutePath, "SOUL.md")),
     safeRead(join(absolutePath, "TOOLS.md")),
     safeRead(join(absolutePath, "BOOTSTRAP.md")),
+    safeRead(join(absolutePath, "WELCOME.md")),
+    safeRead(join(absolutePath, "SCRATCHPAD.md")),
   ]);
 
   const agent: AgentProfile = {
@@ -125,6 +129,8 @@ export async function loadWorkspace(
     soul,
     tools,
     bootstrap,
+    welcomeContext: welcomeContext || undefined,
+    scratchpad,
   };
 
   const permissions = resolvePermissions(workspaceConfig, absolutePath);

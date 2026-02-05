@@ -21,6 +21,12 @@ export interface AgentProfile {
   tools: string;
   /** Full contents of BOOTSTRAP.md — startup instructions. */
   bootstrap: string;
+  /** Whether the agent has been configured by the user. New workspaces start unconfigured. */
+  configured: boolean;
+  /** Optional welcome context from WELCOME.md for initial greeting. */
+  welcomeContext?: string;
+  /** Contents of SCRATCHPAD.md — short-term mutable notes. */
+  scratchpad: string;
 }
 
 /**

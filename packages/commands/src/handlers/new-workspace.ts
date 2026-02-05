@@ -8,7 +8,7 @@ export function createNewWorkspaceCommand(): CommandDefinition {
     name: 'new-workspace',
     aliases: ['create-workspace'],
     description: 'Create a new workspace',
-    usage: '/new-workspace <name>',
+    usage: '/new-workspace <name> [--description "..."]',
     handler: async (args: string, ctx: CommandContext): Promise<CommandResult> => {
       if (!ctx.createWorkspace) {
         const response = 'Workspace creation not available.';
@@ -16,9 +16,17 @@ export function createNewWorkspaceCommand(): CommandDefinition {
         return { handled: true, response, suppressTranscript: true };
       }
 
-      const name = args.trim();
+      // Parse --description or -d flag
+      const descMatch = args.match(/(?:--description|-d)\s+"([^"]+)"/);
+      const description = descMatch ? descMatch[1] : undefined;
+
+      // Extract name (everything before the flag, or the whole string if no flag)
+      let name = descMatch
+        ? args.slice(0, args.indexOf(descMatch[0])).trim()
+        : args.trim();
+
       if (!name) {
-        const response = 'Please provide a name for the workspace.\n\nUsage: `/new-workspace <name>`';
+        const response = 'Please provide a name for the workspace.\n\nUsage: `/new-workspace <name> [--description "..."]`';
         await ctx.sendReply(response, 'markdown');
         return { handled: true, response, suppressTranscript: true };
       }
@@ -31,7 +39,7 @@ export function createNewWorkspaceCommand(): CommandDefinition {
       }
 
       try {
-        const { workspaceId, code } = await ctx.createWorkspace(name);
+        const { workspaceId, code } = await ctx.createWorkspace(name, { description });
 
         const lines = [
           `**Workspace Created: ${name}**`,

@@ -33,6 +33,8 @@ import {
   imageGenTool,
   audioTranscribeTool,
   ttsTool,
+  scratchpadReadTool,
+  scratchpadWriteTool,
   loadSkills,
 } from '@scooby/core';
 import {
@@ -136,6 +138,8 @@ async function main() {
   toolRegistry.register(imageGenTool);
   toolRegistry.register(audioTranscribeTool);
   toolRegistry.register(ttsTool);
+  toolRegistry.register(scratchpadReadTool);
+  toolRegistry.register(scratchpadWriteTool);
 
   // 6b. Create command processor, code manager, and workspace management
   const commandRegistry = createDefaultRegistry();
@@ -332,11 +336,11 @@ async function main() {
       generateWorkspaceCode: () => {
         return codeManager.generate(workspaceId);
       },
-      createWorkspace: async (name: string) => {
+      createWorkspace: async (name: string, options?: { description?: string }) => {
         const info = await workspaceManager.createWorkspace(name, {
           channelType: 'webchat',
           conversationId: connectionId,
-        });
+        }, options);
         await initializeWorkspace(info.id, info.path);
         const code = codeManager.generate(info.id);
         return { workspaceId: info.id, code };
@@ -580,11 +584,11 @@ async function main() {
       generateWorkspaceCode: () => {
         return codeManager.generate(workspaceId);
       },
-      createWorkspace: async (name: string) => {
+      createWorkspace: async (name: string, options?: { description?: string }) => {
         const info = await workspaceManager.createWorkspace(name, {
           channelType: msg.channelType,
           conversationId: msg.conversationId,
-        });
+        }, options);
         await initializeWorkspace(info.id, info.path);
         const code = codeManager.generate(info.id);
         return { workspaceId: info.id, code };
