@@ -107,9 +107,83 @@ export class TelegramAdapter implements ChannelAdapter {
         console.error('[Telegram] Failed to download audio file:', err);
       }
     });
+
+    this.bot.on('message:photo', async (ctx: Context) => {
+      if (!ctx.message?.photo || !ctx.from) return;
+
+      // Telegram sends multiple sizes, get the largest one
+      const photos = ctx.message.photo;
+      const largestPhoto = photos[photos.length - 1];
+
+      try {
+        const localPath = await this.downloadTelegramFile(largestPhoto.file_id, 'jpg', 'scooby-images');
+
+        const msg: InboundMessage = {
+          channelType: 'telegram',
+          conversationId: String(ctx.chat!.id),
+          senderId: String(ctx.from.id),
+          senderName: [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(' '),
+          text: ctx.message.caption ?? '',
+          timestamp: new Date(ctx.message.date * 1000),
+          replyToMessageId: ctx.message.reply_to_message?.message_id
+            ? String(ctx.message.reply_to_message.message_id) : undefined,
+          attachments: [{
+            type: 'photo',
+            localPath,
+            mimeType: 'image/jpeg',
+            fileId: largestPhoto.file_id,
+          }],
+          raw: ctx.message,
+        };
+
+        for (const handler of this.handlers) {
+          await handler(msg);
+        }
+      } catch (err) {
+        console.error('[Telegram] Failed to download photo:', err);
+      }
+    });
+
+    this.bot.on('message:document', async (ctx: Context) => {
+      if (!ctx.message?.document || !ctx.from) return;
+
+      const doc = ctx.message.document;
+      // Check if it's an image document (sometimes images are sent as documents)
+      const isImage = doc.mime_type?.startsWith('image/');
+      const ext = this.extFromMime(doc.mime_type) ?? doc.file_name?.split('.').pop() ?? 'bin';
+
+      try {
+        const localPath = await this.downloadTelegramFile(doc.file_id, ext, isImage ? 'scooby-images' : 'scooby-docs');
+
+        const msg: InboundMessage = {
+          channelType: 'telegram',
+          conversationId: String(ctx.chat!.id),
+          senderId: String(ctx.from.id),
+          senderName: [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(' '),
+          text: ctx.message.caption ?? '',
+          timestamp: new Date(ctx.message.date * 1000),
+          replyToMessageId: ctx.message.reply_to_message?.message_id
+            ? String(ctx.message.reply_to_message.message_id) : undefined,
+          attachments: [{
+            type: isImage ? 'photo' : 'document',
+            localPath,
+            mimeType: doc.mime_type,
+            fileName: doc.file_name,
+            fileId: doc.file_id,
+          }],
+          raw: ctx.message,
+        };
+
+        for (const handler of this.handlers) {
+          await handler(msg);
+        }
+      } catch (err) {
+        console.error('[Telegram] Failed to download document:', err);
+      }
+    });
   }
 
-  private async downloadTelegramFile(fileId: string, ext: string): Promise<string> {
+  private async downloadTelegramFile(fileId: string, ext: string, subdir = 'scooby-audio'): Promise<string> {
     const file = await this.bot.api.getFile(fileId);
     if (!file.file_path) throw new Error('Telegram returned no file_path');
 
@@ -117,7 +191,7 @@ export class TelegramAdapter implements ChannelAdapter {
     const response = await fetch(url);
     if (!response.ok) throw new Error(`Failed to download file: ${response.status}`);
 
-    const dir = join(tmpdir(), 'scooby-audio');
+    const dir = join(tmpdir(), subdir);
     await mkdir(dir, { recursive: true });
     const localPath = join(dir, `${randomUUID()}.${ext}`);
     const buffer = Buffer.from(await response.arrayBuffer());
@@ -128,12 +202,19 @@ export class TelegramAdapter implements ChannelAdapter {
   private extFromMime(mimeType?: string): string | undefined {
     if (!mimeType) return undefined;
     const map: Record<string, string> = {
+      // Audio types
       'audio/mpeg': 'mp3',
       'audio/mp4': 'm4a',
       'audio/ogg': 'ogg',
       'audio/flac': 'flac',
       'audio/wav': 'wav',
       'audio/x-wav': 'wav',
+      // Image types
+      'image/jpeg': 'jpg',
+      'image/png': 'png',
+      'image/gif': 'gif',
+      'image/webp': 'webp',
+      'image/bmp': 'bmp',
     };
     return map[mimeType];
   }
