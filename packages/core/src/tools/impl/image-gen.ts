@@ -442,13 +442,21 @@ export const imageGenTool: ScoobyToolDefinition = {
   async execute(input, ctx) {
     const imagesDir = join(ctx.workspace.path, 'data', 'images');
 
+    // Resolve relative paths in inputImages to absolute paths
+    const resolvedInputImages = input.inputImages?.map((img: InputImage) => {
+      if (img.localPath && !img.localPath.startsWith('/')) {
+        return { ...img, localPath: join(ctx.workspace.path, img.localPath) };
+      }
+      return img;
+    });
+
     const result = await generateImage({
       prompt: input.prompt,
       outputDir: imagesDir,
       provider: input.provider,
       size: input.size,
       quality: input.quality,
-      inputImages: input.inputImages,
+      inputImages: resolvedInputImages,
     });
 
     if (!result.success) {
