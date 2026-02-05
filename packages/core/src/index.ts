@@ -69,3 +69,4 @@ export {
   type TtsOptions,
   type TtsProvider,
 } from './tools/impl/tts.js';
+export { scratchpadReadTool, scratchpadWriteTool } from './tools/impl/scratchpad.js';

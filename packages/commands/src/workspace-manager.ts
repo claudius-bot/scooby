@@ -71,7 +71,8 @@ export class WorkspaceManager {
    */
   async createWorkspace(
     name: string,
-    createdBy?: { channelType: string; conversationId: string }
+    createdBy?: { channelType: string; conversationId: string },
+    options?: { description?: string }
   ): Promise<DynamicWorkspaceInfo> {
     // Generate a URL-safe ID from the name
     const baseId = name
@@ -90,7 +91,7 @@ export class WorkspaceManager {
     const workspacePath = join(this.baseWorkspacesDir, id);
 
     // Create workspace directory structure
-    await this.createWorkspaceStructure(workspacePath, name);
+    await this.createWorkspaceStructure(workspacePath, name, options?.description);
 
     const info: DynamicWorkspaceInfo = {
       id,
@@ -151,7 +152,7 @@ export class WorkspaceManager {
     }
   }
 
-  private async createWorkspaceStructure(workspacePath: string, name: string): Promise<void> {
+  private async createWorkspaceStructure(workspacePath: string, name: string, description?: string): Promise<void> {
     // Create required directories
     const dirs = [
       workspacePath,
@@ -163,17 +164,26 @@ export class WorkspaceManager {
 
     await Promise.all(dirs.map((d) => mkdir(d, { recursive: true })));
 
-    // Create minimal IDENTITY.md
+    // Create IDENTITY.md with configured: false for onboarding
     const identityContent = `---
-name: "${name}"
-vibe: friendly assistant
-emoji: "🤖"
+name: ""
+vibe: ""
+emoji: ""
 avatar: ""
+configured: false
 ---
 
-You are ${name}, a helpful AI assistant.
 `;
 
-    await writeFile(join(workspacePath, 'IDENTITY.md'), identityContent);
+    const writes: Promise<void>[] = [
+      writeFile(join(workspacePath, 'IDENTITY.md'), identityContent),
+    ];
+
+    // Write WELCOME.md if description provided
+    if (description) {
+      writes.push(writeFile(join(workspacePath, 'WELCOME.md'), description));
+    }
+
+    await Promise.all(writes);
   }
 }

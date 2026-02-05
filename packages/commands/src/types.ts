@@ -56,7 +56,7 @@ export interface CommandContext {
 
   // Workspace management
   /** Create a new workspace and return a code to join it. */
-  createWorkspace?: (name: string) => Promise<{ workspaceId: string; code: string }>;
+  createWorkspace?: (name: string, options?: { description?: string }) => Promise<{ workspaceId: string; code: string }>;
   /** Get workspaces the current channel can access. */
   getAccessibleWorkspaces?: () => Promise<WorkspaceInfo[]>;
   /** Switch the current channel to a different workspace. */
