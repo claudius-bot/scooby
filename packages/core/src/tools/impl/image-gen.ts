@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { writeFile, mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
-import type { ScoobyToolDefinition } from '../types.js';
+import { join, basename } from 'node:path';
+import type { ScoobyToolDefinition, ToolContext } from '../types.js';
 
 export const imageGenTool: ScoobyToolDefinition = {
   name: 'image_gen',
@@ -36,10 +36,10 @@ export const imageGenTool: ScoobyToolDefinition = {
     }
 
     if (resolvedProvider === 'openai') {
-      return generateOpenAI(input, imagesDir, timestamp, slug);
+      return generateOpenAI(input, imagesDir, timestamp, slug, ctx);
     }
 
-    return generateGemini(input, imagesDir, timestamp, slug);
+    return generateGemini(input, imagesDir, timestamp, slug, ctx);
   },
 };
 
@@ -48,6 +48,7 @@ async function generateOpenAI(
   imagesDir: string,
   timestamp: number,
   slug: string,
+  ctx: ToolContext,
 ): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return 'Error: OPENAI_API_KEY not set';
@@ -76,22 +77,41 @@ async function generateOpenAI(
   const json = (await response.json()) as { data: Array<{ b64_json?: string; url?: string }> };
   const item = json.data[0];
 
+  let buffer: Buffer | undefined;
+  let filePath: string | undefined;
+
   if (item.b64_json) {
-    const buffer = Buffer.from(item.b64_json, 'base64');
-    const filePath = join(imagesDir, `${timestamp}-${slug}.png`);
+    buffer = Buffer.from(item.b64_json, 'base64');
+    filePath = join(imagesDir, `${timestamp}-${slug}.png`);
     await writeFile(filePath, buffer);
-    return `Image saved to ${filePath} (${buffer.length} bytes)`;
-  }
-
-  if (item.url) {
+  } else if (item.url) {
     const imgResponse = await fetch(item.url);
-    const buffer = Buffer.from(await imgResponse.arrayBuffer());
-    const filePath = join(imagesDir, `${timestamp}-${slug}.png`);
+    buffer = Buffer.from(await imgResponse.arrayBuffer());
+    filePath = join(imagesDir, `${timestamp}-${slug}.png`);
     await writeFile(filePath, buffer);
-    return `Image saved to ${filePath} (${buffer.length} bytes)`;
   }
 
-  return 'Error: No image data returned from OpenAI';
+  if (!buffer || !filePath) {
+    return 'Error: No image data returned from OpenAI';
+  }
+
+  // Send image as attachment if channel supports it
+  if (ctx.conversation) {
+    await ctx.sendMessage(ctx.conversation.channelType, {
+      conversationId: ctx.conversation.conversationId,
+      text: '',
+      attachments: [{
+        type: 'photo',
+        localPath: filePath,
+        mimeType: 'image/png',
+        fileName: basename(filePath),
+        caption: `Generated: ${input.prompt}`,
+      }],
+    });
+    return `Image generated and sent (${buffer.length} bytes)`;
+  }
+
+  return `Image saved to ${filePath} (${buffer.length} bytes)`;
 }
 
 async function generateGemini(
@@ -99,6 +119,7 @@ async function generateGemini(
   imagesDir: string,
   timestamp: number,
   slug: string,
+  ctx: ToolContext,
 ): Promise<string> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return 'Error: GEMINI_API_KEY not set';
@@ -124,8 +145,26 @@ async function generateGemini(
       if (part.inlineData?.data) {
         const buffer = Buffer.from(part.inlineData.data, 'base64');
         const mimeExt = part.inlineData.mimeType?.includes('png') ? 'png' : 'jpg';
+        const mimeType = part.inlineData.mimeType ?? (mimeExt === 'png' ? 'image/png' : 'image/jpeg');
         const filePath = join(imagesDir, `${timestamp}-${slug}.${mimeExt}`);
         await writeFile(filePath, buffer);
+
+        // Send image as attachment if channel supports it
+        if (ctx.conversation) {
+          await ctx.sendMessage(ctx.conversation.channelType, {
+            conversationId: ctx.conversation.conversationId,
+            text: '',
+            attachments: [{
+              type: 'photo',
+              localPath: filePath,
+              mimeType,
+              fileName: basename(filePath),
+              caption: `Generated: ${input.prompt}`,
+            }],
+          });
+          return `Image generated and sent (${buffer.length} bytes)`;
+        }
+
         return `Image saved to ${filePath} (${buffer.length} bytes)`;
       }
     }

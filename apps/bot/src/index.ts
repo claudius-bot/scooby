@@ -32,6 +32,7 @@ import {
   webFetchTool,
   imageGenTool,
   audioTranscribeTool,
+  ttsTool,
   loadSkills,
 } from '@scooby/core';
 import {
@@ -134,6 +135,7 @@ async function main() {
   toolRegistry.register(webFetchTool);
   toolRegistry.register(imageGenTool);
   toolRegistry.register(audioTranscribeTool);
+  toolRegistry.register(ttsTool);
 
   // 6b. Create command processor, code manager, and workspace management
   const commandRegistry = createDefaultRegistry();
@@ -314,6 +316,13 @@ async function main() {
           usage: { promptTokens: 0, completionTokens: 0 },
         });
       },
+      sendAttachment: async (attachment) => {
+        await webChatAdapter.send({
+          conversationId: connectionId,
+          text: attachment.caption ?? '',
+          attachments: [attachment],
+        });
+      },
       getUsageSummary: async (days?: number) => {
         return loadUsageSummary(resolve(ws.path, 'data'), { days });
       },
@@ -387,6 +396,10 @@ async function main() {
       workspace: { id: ws.id, path: ws.path },
       session: { id: session.id, workspaceId },
       permissions: ws.permissions,
+      conversation: {
+        channelType: 'webchat',
+        conversationId: connectionId,
+      },
       sendMessage,
     };
 
@@ -549,6 +562,15 @@ async function main() {
           });
         }
       },
+      sendAttachment: async (attachment) => {
+        if (adapter) {
+          await adapter.send({
+            conversationId: msg.conversationId,
+            text: attachment.caption ?? '',
+            attachments: [attachment],
+          });
+        }
+      },
       getUsageSummary: async (days?: number) => {
         return loadUsageSummary(resolve(ws.path, 'data'), { days });
       },
@@ -657,6 +679,10 @@ async function main() {
       workspace: { id: ws.id, path: ws.path },
       session: { id: session.id, workspaceId },
       permissions: ws.permissions,
+      conversation: {
+        channelType: msg.channelType,
+        conversationId: msg.conversationId,
+      },
       sendMessage,
     };
 

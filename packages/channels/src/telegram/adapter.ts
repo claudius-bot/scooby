@@ -1,9 +1,9 @@
-import { Bot, type Context } from 'grammy';
-import { writeFile, mkdir } from 'node:fs/promises';
+import { Bot, InputFile, type Context } from 'grammy';
+import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { ChannelAdapter, InboundMessage, OutboundMessage, MessageHandler } from '../types.js';
+import type { ChannelAdapter, InboundMessage, OutboundMessage, OutboundAttachment, MessageHandler } from '../types.js';
 
 export interface TelegramAdapterConfig {
   botToken: string;
@@ -154,18 +154,99 @@ export class TelegramAdapter implements ChannelAdapter {
   async send(message: OutboundMessage): Promise<void> {
     const chatId = Number(message.conversationId);
     const useMarkdown = message.format === 'markdown';
-    const text = useMarkdown ? escapeMarkdownV2(message.text) : message.text;
+
+    // Handle attachments first
+    if (message.attachments?.length) {
+      for (const attachment of message.attachments) {
+        await this.sendAttachment(chatId, attachment, useMarkdown, message.replyToMessageId);
+      }
+      // If there's also text beyond just attachment captions, send it
+      if (message.text.trim()) {
+        await this.sendText(chatId, message.text, useMarkdown, message.replyToMessageId);
+      }
+      return;
+    }
+
+    await this.sendText(chatId, message.text, useMarkdown, message.replyToMessageId);
+  }
+
+  private async sendAttachment(
+    chatId: number,
+    attachment: OutboundAttachment,
+    useMarkdown: boolean,
+    replyToMessageId?: string,
+  ): Promise<void> {
+    let fileSource: InputFile | undefined;
+
+    if (attachment.localPath) {
+      const buffer = await readFile(attachment.localPath);
+      fileSource = new InputFile(buffer, attachment.fileName);
+    } else if (attachment.data) {
+      const buffer = Buffer.from(attachment.data, 'base64');
+      fileSource = new InputFile(buffer, attachment.fileName);
+    }
+
+    if (!fileSource) {
+      console.warn('[Telegram] Attachment has no localPath or data');
+      return;
+    }
+
+    const caption = attachment.caption
+      ? (useMarkdown ? escapeMarkdownV2(attachment.caption) : attachment.caption)
+      : undefined;
+
+    const replyTo = replyToMessageId ? Number(replyToMessageId) : undefined;
+
+    switch (attachment.type) {
+      case 'photo':
+        await this.bot.api.sendPhoto(chatId, fileSource, {
+          caption,
+          parse_mode: useMarkdown && caption ? 'MarkdownV2' : undefined,
+          reply_to_message_id: replyTo,
+        });
+        break;
+      case 'document':
+        await this.bot.api.sendDocument(chatId, fileSource, {
+          caption,
+          parse_mode: useMarkdown && caption ? 'MarkdownV2' : undefined,
+          reply_to_message_id: replyTo,
+        });
+        break;
+      case 'audio':
+        await this.bot.api.sendAudio(chatId, fileSource, {
+          caption,
+          parse_mode: useMarkdown && caption ? 'MarkdownV2' : undefined,
+          reply_to_message_id: replyTo,
+        });
+        break;
+      case 'video':
+        await this.bot.api.sendVideo(chatId, fileSource, {
+          caption,
+          parse_mode: useMarkdown && caption ? 'MarkdownV2' : undefined,
+          reply_to_message_id: replyTo,
+        });
+        break;
+    }
+  }
+
+  private async sendText(
+    chatId: number,
+    text: string,
+    useMarkdown: boolean,
+    replyToMessageId?: string,
+  ): Promise<void> {
+    const escapedText = useMarkdown ? escapeMarkdownV2(text) : text;
 
     // Telegram has 4096 char limit per message
     const MAX_LEN = 4096;
-    if (text.length <= MAX_LEN) {
-      await this.bot.api.sendMessage(chatId, text, {
+    if (escapedText.length <= MAX_LEN) {
+      await this.bot.api.sendMessage(chatId, escapedText, {
         parse_mode: useMarkdown ? 'MarkdownV2' : undefined,
-        reply_to_message_id: message.replyToMessageId ? Number(message.replyToMessageId) : undefined,
+        reply_to_message_id: replyToMessageId ? Number(replyToMessageId) : undefined,
       });
     } else {
       // Split into chunks at newline boundaries where possible
-      const chunks = this.splitMessage(text, MAX_LEN);
+      const chunks = this.splitMessage(escapedText, MAX_LEN);
       for (const chunk of chunks) {
         await this.bot.api.sendMessage(chatId, chunk, {
           parse_mode: useMarkdown ? 'MarkdownV2' : undefined,
