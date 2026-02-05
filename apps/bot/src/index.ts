@@ -658,17 +658,24 @@ async function main() {
     }
 
     // Process photo attachments
+    console.log(`[Scooby] Message attachments:`, msg.attachments);
     const photoAttachments = (msg.attachments ?? []).filter(
       (a) => a.type === 'photo'
     );
+    console.log(`[Scooby] Photo attachments found: ${photoAttachments.length}`);
 
     for (const attachment of photoAttachments) {
-      if (!attachment.localPath) continue;
+      console.log(`[Scooby] Processing photo attachment:`, attachment);
+      if (!attachment.localPath) {
+        console.log(`[Scooby] Skipping attachment - no localPath`);
+        continue;
+      }
       try {
         const imagesDir = resolve(ws.path, 'data', 'images');
         await mkdir(imagesDir, { recursive: true });
         const fileName = basename(attachment.localPath);
         const destPath = resolve(imagesDir, fileName);
+        console.log(`[Scooby] Copying photo from ${attachment.localPath} to ${destPath}`);
         await copyFile(attachment.localPath, destPath);
         // Clean up temp file
         await unlink(attachment.localPath).catch(() => {});
@@ -678,6 +685,7 @@ async function main() {
         } else {
           messageContent += `\n[The user sent an image saved to data/images/${fileName}. If they're asking for image modifications, use the image_gen tool with inputImages containing localPath "data/images/${fileName}" to process it.]`;
         }
+        console.log(`[Scooby] Updated messageContent:`, messageContent);
       } catch (err) {
         console.error(`[Scooby] Failed to process photo attachment:`, err);
       }
