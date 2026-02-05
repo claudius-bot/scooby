@@ -163,25 +163,24 @@ async function main() {
   for (const info of workspaceManager.listWorkspaces()) {
     if (workspaces.has(info.id)) continue;
 
-      try {
-        const ws = await loadWorkspace({ id: info.id, path: info.path }, configDir);
-        workspaces.set(ws.id, ws);
+    try {
+      const ws = await loadWorkspace({ id: info.id, path: info.path }, configDir);
+      workspaces.set(ws.id, ws);
 
-        // Create session manager and usage tracker for this workspace
-        const mgr = new SessionManager({
-          sessionsDir: resolve(ws.path, 'sessions'),
-          workspaceId: ws.id,
-          idleResetMinutes: sessionConfig.idleResetMinutes ?? 30,
-          maxTranscriptLines: sessionConfig.maxTranscriptLines ?? 500,
-        });
-        sessionManagers.set(ws.id, mgr);
-        usageTrackers.set(ws.id, new UsageTracker(resolve(ws.path, 'data')));
+      // Create session manager and usage tracker for this workspace
+      const mgr = new SessionManager({
+        sessionsDir: resolve(ws.path, 'sessions'),
+        workspaceId: ws.id,
+        idleResetMinutes: sessionConfig.idleResetMinutes ?? 30,
+        maxTranscriptLines: sessionConfig.maxTranscriptLines ?? 500,
+      });
+      sessionManagers.set(ws.id, mgr);
+      usageTrackers.set(ws.id, new UsageTracker(resolve(ws.path, 'data')));
 
-        console.log(`[Scooby] Dynamic workspace loaded: ${ws.id} (${ws.agent.name})`);
-      } catch (err) {
-        console.error(`[Scooby] Failed to load dynamic workspace ${info.id}:`, err);
-      }
-    
+      console.log(`[Scooby] Dynamic workspace loaded: ${ws.id} (${ws.agent.name})`);
+    } catch (err) {
+      console.error(`[Scooby] Failed to load dynamic workspace ${info.id}:`, err);
+    }
   }
 
   // Helper to initialize a newly created workspace
@@ -199,6 +198,19 @@ async function main() {
     usageTrackers.set(ws.id, new UsageTracker(resolve(ws.path, 'data')));
 
     return ws;
+  };
+
+  // Helper to build a createWorkspace callback for command contexts
+  const makeCreateWorkspace = (channelType: string, conversationId: string) => {
+    return async (name: string, options?: { description?: string }) => {
+      const info = await workspaceManager.createWorkspace(name, {
+        channelType,
+        conversationId,
+      }, options);
+      await initializeWorkspace(info.id, info.path);
+      const code = codeManager.generate(info.id);
+      return { workspaceId: info.id, code };
+    };
   };
 
   console.log('[Scooby] Command processor initialized');
@@ -336,15 +348,7 @@ async function main() {
       generateWorkspaceCode: () => {
         return codeManager.generate(workspaceId);
       },
-      createWorkspace: async (name: string, options?: { description?: string }) => {
-        const info = await workspaceManager.createWorkspace(name, {
-          channelType: 'webchat',
-          conversationId: connectionId,
-        }, options);
-        await initializeWorkspace(info.id, info.path);
-        const code = codeManager.generate(info.id);
-        return { workspaceId: info.id, code };
-      },
+      createWorkspace: makeCreateWorkspace('webchat', connectionId),
       getAccessibleWorkspaces: async (): Promise<WorkspaceInfo[]> => {
         const accessibleIds = channelAccess.getAccessibleWorkspaces('webchat', connectionId);
         const result: WorkspaceInfo[] = [];
@@ -584,15 +588,7 @@ async function main() {
       generateWorkspaceCode: () => {
         return codeManager.generate(workspaceId);
       },
-      createWorkspace: async (name: string, options?: { description?: string }) => {
-        const info = await workspaceManager.createWorkspace(name, {
-          channelType: msg.channelType,
-          conversationId: msg.conversationId,
-        }, options);
-        await initializeWorkspace(info.id, info.path);
-        const code = codeManager.generate(info.id);
-        return { workspaceId: info.id, code };
-      },
+      createWorkspace: makeCreateWorkspace(msg.channelType, msg.conversationId),
       getAccessibleWorkspaces: async (): Promise<WorkspaceInfo[]> => {
         const accessibleIds = channelAccess.getAccessibleWorkspaces(msg.channelType, msg.conversationId);
         const currentRoute = router.route(msg);
