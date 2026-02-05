@@ -3,26 +3,28 @@
   models: {
     fast: {
       candidates: [
-        { provider: "openai", model: "gpt-4o-mini" },
-        { provider: "anthropic", model: "claude-3-5-haiku-20241022" },
+        { provider: 'anthropic', model: 'claude-haiku-4.5' },
+        { provider: 'google', model: 'gemini-3-flash' },
+        { provider: 'openai', model: 'gpt-5-mini' },
       ],
     },
     slow: {
       candidates: [
-        { provider: "anthropic", model: "claude-sonnet-4-20250514" },
-        { provider: "openai", model: "gpt-4o" },
+        { provider: 'anthropic', model: 'claude-sonnet-4' },
+        { provider: 'google', model: 'gemini-3-pro-preview' },
+        { provider: 'openai', model: 'gpt-5' },
       ],
     },
     embedding: {
-      provider: "openai",
-      model: "text-embedding-3-small",
+      provider: 'openai',
+      model: 'text-embedding-3-small',
     },
   },
 
   workspaces: [
     {
-      id: "default",
-      path: "./workspaces/default",
+      id: 'default',
+      path: './workspaces/default',
       permissions: {
         sandbox: true,
       },
@@ -31,7 +33,7 @@
 
   channels: {
     telegram: {
-      botToken: "${TELEGRAM_BOT_TOKEN}",
+      botToken: '${TELEGRAM_BOT_TOKEN}',
     },
     webchat: {
       enabled: true,
@@ -39,10 +41,10 @@
   },
 
   gateway: {
-    host: "0.0.0.0",
+    host: '0.0.0.0',
     port: 3000,
     websocket: {
-      path: "/ws",
+      path: '/ws',
     },
   },
 

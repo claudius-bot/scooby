@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.36",
+    "@ai-sdk/gateway": "^3.0.34",
     "@ai-sdk/openai": "^3.0.25",
     "@google/genai": "^1.0.0",
     "@mozilla/readability": "^0.6.0",

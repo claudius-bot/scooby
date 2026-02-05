@@ -52,7 +52,7 @@ export class ModelSelector {
   select(
     group: ModelGroup,
     globalCandidates: ModelCandidate[],
-    workspaceCandidates?: ModelCandidate[],
+    workspaceCandidates?: ModelCandidate[]
   ): ModelSelection | null {
     const candidates = workspaceCandidates ?? globalCandidates;
 
@@ -76,7 +76,7 @@ export class ModelSelector {
   getAvailableCandidates(
     group: ModelGroup,
     globalCandidates: ModelCandidate[],
-    workspaceCandidates?: ModelCandidate[],
+    workspaceCandidates?: ModelCandidate[]
   ): ModelCandidate[] {
     const candidates = workspaceCandidates ?? globalCandidates;
     return candidates.filter((c) => this.cooldowns.isAvailable(c.provider, c.model));

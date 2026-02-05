@@ -12,7 +12,9 @@ const providers = new Map<string, ProviderFactory>();
 // Gateway config set at startup
 let gatewayConfig: { apiKey?: string; baseURL?: string } | undefined;
 
-export function setAiGatewayConfig(config: { apiKey?: string; baseURL?: string } | undefined): void {
+export function setAiGatewayConfig(
+  config: { apiKey?: string; baseURL?: string } | undefined
+): void {
   gatewayConfig = config;
   // Clear cached gateway provider so it picks up new config
   providers.delete('gateway');
@@ -33,14 +35,8 @@ function getOrCreateProvider(name: string): ProviderFactory {
       };
       break;
     }
-    case 'anthropic': {
-      const anthropic = createAnthropic();
-      factory = {
-        languageModel: (modelId: string) => anthropic.languageModel(modelId),
-      };
-      break;
-    }
-    case 'gateway': {
+    case 'gateway':
+    default: {
       const gw = createGateway({
         apiKey: gatewayConfig?.apiKey ?? process.env.AI_GATEWAY_API_KEY,
         ...(gatewayConfig?.baseURL ? { baseURL: gatewayConfig.baseURL } : {}),
@@ -51,8 +47,8 @@ function getOrCreateProvider(name: string): ProviderFactory {
       };
       break;
     }
-    default:
-      throw new Error(`Unknown AI provider: "${name}". Supported providers: openai, anthropic, gateway`);
+    // default:
+    //   throw new Error(`Unknown AI provider: "${name}". Supported providers: openai, anthropic, gateway`);
   }
 
   providers.set(name, factory);

@@ -19,6 +19,8 @@ export interface TranscriptEntry {
     modelUsed?: string;
     modelGroup?: 'fast' | 'slow';
     tokenUsage?: { prompt: number; completion: number };
+    escalated?: boolean;
+    escalationReason?: string;
   };
 }
 

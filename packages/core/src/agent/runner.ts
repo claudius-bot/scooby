@@ -1,13 +1,25 @@
-import { streamText, stepCountIs, type ModelMessage } from 'ai';
+import { streamText, stepCountIs, type ModelMessage, gateway } from 'ai';
 import type { ToolRegistry } from '../tools/registry.js';
 import type { ToolContext } from '../tools/types.js';
 import type { SessionManager } from '../session/manager.js';
 import type { TranscriptEntry } from '../session/types.js';
 import type { ModelCandidate } from '../config/schema.js';
-import { ModelSelector, CooldownTracker, type ModelGroup } from '../ai/model-group.js';
+import {
+  ModelSelector,
+  CooldownTracker,
+  type ModelGroup,
+  type ModelSelection,
+} from '../ai/model-group.js';
 import { streamWithFailover } from '../ai/failover.js';
 import { getLanguageModel } from '../ai/provider.js';
-import { createEscalationState, shouldEscalate, recordToolCall, recordTokenUsage, escalate, type EscalationState } from '../ai/escalation.js';
+import {
+  createEscalationState,
+  shouldEscalate,
+  recordToolCall,
+  recordTokenUsage,
+  escalate,
+  type EscalationState,
+} from '../ai/escalation.js';
 import { buildSystemPrompt, type PromptContext } from './prompt-builder.js';
 import { loadSkills } from './skills.js';
 import type { UsageTracker } from '../usage/tracker.js';
@@ -41,11 +53,31 @@ export interface AgentRunOptions {
   channelType?: string;
 }
 
+const providerEnvKeys: Record<string, string> = {
+  anthropic: 'ANTHROPIC_API_KEY',
+  google: 'GEMINI_API_KEY',
+  openai: 'OPENAI_API_KEY',
+  xai: 'XAI_API_KEY',
+};
+
+function buildGatewayOptions(
+  provider: string
+): { byok: Record<string, { apiKey: string }[]> } | null {
+  const envKey = providerEnvKeys[provider];
+  const apiKey = envKey ? process.env[envKey] : undefined;
+  if (!apiKey) return null;
+  return {
+    byok: {
+      [provider]: [{ apiKey }],
+    },
+  };
+}
+
 export class AgentRunner {
   constructor(
     private toolRegistry: ToolRegistry,
     private cooldowns: CooldownTracker,
-    private sessionManager: SessionManager,
+    private sessionManager: SessionManager
   ) {}
 
   async *run(options: AgentRunOptions): AsyncGenerator<AgentStreamEvent> {
@@ -73,68 +105,136 @@ export class AgentRunner {
     // Check if any tool in the conversation requires slow model
     const slowTools = this.toolRegistry.getToolsRequestingGroup('slow');
 
-    // Select initial model
-    const globalCandidates = options.globalModels[currentGroup];
-    const workspaceCandidates = options.workspaceModels?.[currentGroup];
+    // Helper to select model for current group
+    const selectModel = (group: ModelGroup): ModelSelection | null => {
+      const globalCandidates = options.globalModels[group];
+      const workspaceCandidates = options.workspaceModels?.[group];
+      return selector.select(group, globalCandidates, workspaceCandidates);
+    };
 
-    let selection = selector.select(currentGroup, globalCandidates, workspaceCandidates);
+    // Select initial model
+    let selection = selectModel(currentGroup);
     if (!selection) {
-      yield { type: 'done', response: 'No available models for this request.', usage: { promptTokens: 0, completionTokens: 0 } };
+      yield {
+        type: 'done',
+        response: 'No available models for this request.',
+        usage: { promptTokens: 0, completionTokens: 0 },
+      };
       return;
     }
 
     let fullResponse = '';
     let totalPromptTokens = 0;
     let totalCompletionTokens = 0;
-
-    // Prepare candidates for failover
-    const prepareCandidates = (group: ModelGroup) => {
-      const candidates = options.workspaceModels?.[group] ?? options.globalModels[group];
-      return candidates.map(c => ({
-        model: getLanguageModel(c.provider, c.model),
-        candidate: c,
-      }));
-    };
+    let currentMessages = [...options.messages];
+    let needsEscalationRerun = false;
+    let maxRuns = 3; // Prevent infinite loops
+    let runCount = 0;
 
     try {
-      const result = streamText({
-        model: selection.model,
-        system: systemPrompt,
-        messages: options.messages,
-        tools: aiTools,
-        stopWhen: stepCountIs(10),
-        onStepFinish: async (step) => {
-          // Record tool calls for escalation tracking
-          if (step.toolCalls && step.toolCalls.length > 0) {
-            for (const _tc of step.toolCalls) {
-              escState = recordToolCall(escState);
+      while (runCount < maxRuns) {
+        runCount++;
+        needsEscalationRerun = false;
+        let stepHadToolCalls = false;
+        const gatewayOpts = buildGatewayOptions(selection.candidate.provider);
+        const result = streamText({
+          model: selection.model,
+          system: systemPrompt,
+          messages: currentMessages,
+          tools: aiTools,
+          stopWhen: stepCountIs(10),
+          onStepFinish: async (step) => {
+            // Record tool calls for escalation tracking
+            if (step.toolCalls && step.toolCalls.length > 0) {
+              stepHadToolCalls = true;
+              for (const _tc of step.toolCalls) {
+                escState = recordToolCall(escState);
+              }
             }
-          }
-          // Record token usage
-          if (step.usage) {
-            escState = recordTokenUsage(escState, (step.usage.inputTokens ?? 0) + (step.usage.outputTokens ?? 0));
-            totalPromptTokens += step.usage.inputTokens ?? 0;
-            totalCompletionTokens += step.usage.outputTokens ?? 0;
-          }
-        },
-      });
+            // Record token usage
+            if (step.usage) {
+              escState = recordTokenUsage(
+                escState,
+                (step.usage.inputTokens ?? 0) + (step.usage.outputTokens ?? 0)
+              );
+              totalPromptTokens += step.usage.inputTokens ?? 0;
+              totalCompletionTokens += step.usage.outputTokens ?? 0;
+            }
+            // Check if we should escalate after this step
+            if (currentGroup === 'fast' && shouldEscalate(escState)) {
+              escState = escalate(escState, escState.reason ?? 'Threshold exceeded');
+            }
+          },
+          providerOptions: gatewayOpts ? { gateway: gatewayOpts } : undefined,
+        });
 
-      for await (const part of result.fullStream) {
-        switch (part.type) {
-          case 'text-delta':
-            fullResponse += part.text;
-            yield { type: 'text-delta', content: part.text };
-            break;
-          case 'tool-call':
-            yield { type: 'tool-call', toolName: part.toolName, args: part.input };
-            // Check if this tool requests slow model
-            if (slowTools.includes(part.toolName) && currentGroup === 'fast') {
-              escState = escalate(escState, `Tool ${part.toolName} requests slow model`);
+        // Collect tool calls and results for potential continuation
+        const toolCallsInRun: Array<{ toolName: string; args: unknown; result: unknown }> = [];
+
+        for await (const part of result.fullStream) {
+          switch (part.type) {
+            case 'text-delta':
+              fullResponse += part.text;
+              yield { type: 'text-delta', content: part.text };
+              break;
+            case 'tool-call':
+              yield { type: 'tool-call', toolName: part.toolName, args: part.input };
+              // Check if this tool requests slow model
+              if (slowTools.includes(part.toolName) && currentGroup === 'fast') {
+                escState = escalate(escState, `Tool ${part.toolName} requests slow model`);
+              }
+              toolCallsInRun.push({ toolName: part.toolName, args: part.input, result: undefined });
+              break;
+            case 'tool-result':
+              yield {
+                type: 'tool-result',
+                toolName: part.toolName,
+                result: typeof part.output === 'string' ? part.output : JSON.stringify(part.output),
+              };
+              // Update the last matching tool call with its result
+              const lastCall = [...toolCallsInRun]
+                .reverse()
+                .find((tc) => tc.toolName === part.toolName && tc.result === undefined);
+              if (lastCall) {
+                lastCall.result = part.output;
+              }
+              break;
+          }
+        }
+
+        // After stream completes, check if we need to escalate and re-run
+        if (escState.escalated && currentGroup === 'fast' && stepHadToolCalls) {
+          const previousModel = `${selection.candidate.provider}:${selection.candidate.model}`;
+          currentGroup = 'slow';
+          const newSelection = selectModel(currentGroup);
+
+          if (newSelection) {
+            const newModel = `${newSelection.candidate.provider}:${newSelection.candidate.model}`;
+            yield {
+              type: 'model-switch',
+              from: previousModel,
+              to: newModel,
+              reason: escState.reason ?? 'Escalation triggered',
+            };
+
+            selection = newSelection;
+            needsEscalationRerun = true;
+
+            // Build continuation messages: original + assistant response + tool results
+            // The AI SDK handles this internally, but for a clean restart we append context
+            if (fullResponse) {
+              currentMessages = [
+                ...currentMessages,
+                { role: 'assistant' as const, content: fullResponse },
+              ];
+              fullResponse = ''; // Reset for continuation
             }
-            break;
-          case 'tool-result':
-            yield { type: 'tool-result', toolName: part.toolName, result: typeof part.output === 'string' ? part.output : JSON.stringify(part.output) };
-            break;
+          }
+        }
+
+        // If no escalation rerun needed, we're done
+        if (!needsEscalationRerun) {
+          break;
         }
       }
 
@@ -147,6 +247,8 @@ export class AgentRunner {
           metadata: {
             modelUsed: `${selection.candidate.provider}:${selection.candidate.model}`,
             modelGroup: currentGroup,
+            escalated: escState.escalated,
+            escalationReason: escState.reason,
             tokenUsage: { prompt: totalPromptTokens, completion: totalCompletionTokens },
           },
         });
@@ -159,11 +261,7 @@ export class AgentRunner {
           output: totalCompletionTokens,
           total: totalPromptTokens + totalCompletionTokens,
         };
-        const cost = estimateCost(
-          selection.candidate.provider,
-          selection.candidate.model,
-          tokens,
-        );
+        const cost = estimateCost(selection.candidate.provider, selection.candidate.model, tokens);
         await options.usageTracker.record({
           timestamp: new Date().toISOString(),
           workspaceId: options.workspaceId,
@@ -177,7 +275,6 @@ export class AgentRunner {
           channelType: options.channelType,
         });
       }
-
     } catch (err) {
       fullResponse = `Error during agent execution: ${err instanceof Error ? err.message : String(err)}`;
     }
