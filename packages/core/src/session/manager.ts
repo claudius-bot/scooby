@@ -117,9 +117,10 @@ export class SessionManager {
     if (archivedIds.length > 0) {
       await this.metaStore.write(sessions);
 
-      // Compact transcripts for archived sessions
+      // Compact transcripts for archived sessions and free stores from memory
       for (const id of archivedIds) {
         await this.compactTranscript(id);
+        this.transcriptStores.delete(id);
       }
     }
 
@@ -139,6 +140,7 @@ export class SessionManager {
     });
 
     await this.compactTranscript(sessionId);
+    this.transcriptStores.delete(sessionId);
   }
 
   private getTranscriptStore(sessionId: string): JsonlStore<TranscriptEntry> {
@@ -176,11 +178,7 @@ export class SessionManager {
     const count = await store.lineCount();
     if (count > this.config.maxTranscriptLines) {
       const entries = await store.readLast(this.config.maxTranscriptLines);
-      await store.compact(() => false);  // Clear all
-      // Rewrite with only the last N entries
-      for (const entry of entries) {
-        await store.append(entry);
-      }
+      await store.rewrite(entries);
     }
   }
 }

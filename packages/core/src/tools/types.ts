@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { PermissionContext } from './permissions.js';
 
 export interface OutboundAttachment {
   type: 'photo' | 'document' | 'audio' | 'video';
@@ -20,12 +21,7 @@ export interface OutboundMessage {
 export interface ToolContext {
   workspace: { id: string; path: string };
   session: { id: string; workspaceId: string };
-  permissions: {
-    allowedTools: Set<string> | null;
-    deniedTools: Set<string>;
-    sandbox: boolean;
-    workspacePath: string;
-  };
+  permissions: PermissionContext;
   conversation?: {
     channelType: string;
     conversationId: string;

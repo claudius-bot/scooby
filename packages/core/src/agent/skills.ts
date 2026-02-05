@@ -22,8 +22,8 @@ export async function loadSkills(workspacePath: string): Promise<SkillDefinition
           always: data.always ?? false,
           modelGroup: data.modelGroup,
         });
-      } catch {
-        // Skip skills that can't be loaded
+      } catch (err) {
+        console.warn(`Failed to load skill "${entry.name}":`, err);
       }
     }
   } catch {
