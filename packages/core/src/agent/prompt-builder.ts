@@ -1,11 +1,7 @@
 import type { AgentProfile } from '../workspace/types.js';
 
 export interface PromptContext {
-  agent: AgentProfile & {
-    configured: boolean;
-    welcomeContext?: string;
-    scratchpad: string;
-  };
+  agent: AgentProfile;
   skills: SkillDefinition[];
   memoryContext: string[];     // relevant memory chunks
   timestamp: Date;

@@ -1,26 +1,27 @@
 import { z } from 'zod';
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import { join, dirname } from 'node:path';
+import { readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { ScoobyToolDefinition } from '../types.js';
+
+const SCRATCHPAD_FILE = 'SCRATCHPAD.md';
+const MAX_SCRATCHPAD_SIZE = 10_000; // characters
 
 /**
  * Safely read the scratchpad file.
  */
 async function readScratchpad(workspacePath: string): Promise<string> {
   try {
-    return await readFile(join(workspacePath, 'SCRATCHPAD.md'), 'utf-8');
+    return await readFile(join(workspacePath, SCRATCHPAD_FILE), 'utf-8');
   } catch {
     return '';
   }
 }
 
 /**
- * Write to the scratchpad file.
+ * Write to the scratchpad file (workspace directory is guaranteed to exist).
  */
 async function writeScratchpad(workspacePath: string, content: string): Promise<void> {
-  const filePath = join(workspacePath, 'SCRATCHPAD.md');
-  await mkdir(dirname(filePath), { recursive: true });
-  await writeFile(filePath, content, 'utf-8');
+  await writeFile(join(workspacePath, SCRATCHPAD_FILE), content, 'utf-8');
 }
 
 export const scratchpadReadTool: ScoobyToolDefinition = {
@@ -43,6 +44,9 @@ export const scratchpadWriteTool: ScoobyToolDefinition = {
     content: z.string().describe('The new content for the scratchpad. Pass an empty string to clear it.'),
   }),
   async execute(input, ctx) {
+    if (input.content.length > MAX_SCRATCHPAD_SIZE) {
+      return `Content too large (${input.content.length} chars). Maximum is ${MAX_SCRATCHPAD_SIZE} characters. Trim or summarize your notes.`;
+    }
     await writeScratchpad(ctx.workspace.path, input.content);
     if (!input.content.trim()) {
       return 'Scratchpad cleared.';

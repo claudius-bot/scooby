@@ -16,13 +16,13 @@ export function createNewWorkspaceCommand(): CommandDefinition {
         return { handled: true, response, suppressTranscript: true };
       }
 
-      // Parse --description or -d flag
-      const descMatch = args.match(/(?:--description|-d)\s+"([^"]+)"/);
-      const description = descMatch ? descMatch[1] : undefined;
+      // Parse --description or -d flag (supports double quotes, single quotes, and = syntax)
+      const descMatch = args.match(/(?:--description|-d)(?:=|\s+)(["'])(.+?)\1/);
+      const description = descMatch ? descMatch[2] : undefined;
 
-      // Extract name (everything before the flag, or the whole string if no flag)
-      let name = descMatch
-        ? args.slice(0, args.indexOf(descMatch[0])).trim()
+      // Extract name by removing the flag and its value from the args
+      const name = descMatch
+        ? args.replace(descMatch[0], '').trim()
         : args.trim();
 
       if (!name) {
