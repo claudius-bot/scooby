@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { writeFile, mkdir } from 'node:fs/promises';
+import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import { join, basename } from 'node:path';
 import type { ScoobyToolDefinition, ToolContext } from '../types.js';
 
@@ -16,6 +16,25 @@ export const IMAGE_SIZES = ['256x256', '512x512', '1024x1024', '1024x1792', '179
 export const IMAGE_QUALITIES = ['low', 'medium', 'high', 'auto'] as const;
 
 export type ImageProvider = 'openai' | 'gemini';
+
+// ============================================================================
+// Input Image Type
+// ============================================================================
+
+/**
+ * An input image for image-to-image generation.
+ * Provide either data (base64), localPath, or url.
+ */
+export interface InputImage {
+  /** Base64-encoded image data */
+  data?: string;
+  /** Path to a local image file */
+  localPath?: string;
+  /** URL to fetch the image from */
+  url?: string;
+  /** MIME type of the image (auto-detected if not provided) */
+  mimeType?: string;
+}
 
 // ============================================================================
 // Image Result Type
@@ -42,6 +61,53 @@ export interface ImageOptions {
   size?: string;
   quality?: string;
   timeoutMs?: number;
+  /** Optional input images for image-to-image generation */
+  inputImages?: InputImage[];
+}
+
+// ============================================================================
+// Helper to load input image data
+// ============================================================================
+
+interface ResolvedImage {
+  data: Buffer;
+  mimeType: string;
+}
+
+async function resolveInputImage(input: InputImage): Promise<ResolvedImage> {
+  let data: Buffer;
+  let mimeType = input.mimeType ?? 'image/png';
+
+  if (input.data) {
+    data = Buffer.from(input.data, 'base64');
+  } else if (input.localPath) {
+    data = await readFile(input.localPath);
+    // Infer mime type from extension if not provided
+    if (!input.mimeType) {
+      const ext = input.localPath.toLowerCase().split('.').pop();
+      if (ext === 'jpg' || ext === 'jpeg') mimeType = 'image/jpeg';
+      else if (ext === 'png') mimeType = 'image/png';
+      else if (ext === 'gif') mimeType = 'image/gif';
+      else if (ext === 'webp') mimeType = 'image/webp';
+    }
+  } else if (input.url) {
+    const response = await fetch(input.url);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch image from URL: ${response.status}`);
+    }
+    data = Buffer.from(await response.arrayBuffer());
+    // Try to get mime type from response headers
+    if (!input.mimeType) {
+      const contentType = response.headers.get('content-type');
+      if (contentType?.startsWith('image/')) {
+        mimeType = contentType.split(';')[0];
+      }
+    }
+  } else {
+    throw new Error('InputImage must have data, localPath, or url');
+  }
+
+  return { data, mimeType };
 }
 
 // ============================================================================
@@ -49,11 +115,18 @@ export interface ImageOptions {
 // ============================================================================
 
 /**
- * Generate an image from a text prompt. This is the core function used by both
- * the image_gen tool and the /image slash command.
+ * Generate an image from a text prompt, optionally using input images as reference.
+ * This is the core function used by both the image_gen tool and the /image slash command.
  */
 export async function generateImage(options: ImageOptions): Promise<ImageResult> {
-  const { prompt, outputDir, size = DEFAULT_SIZE, quality = DEFAULT_QUALITY, timeoutMs = DEFAULT_TIMEOUT_MS } = options;
+  const {
+    prompt,
+    outputDir,
+    size = DEFAULT_SIZE,
+    quality = DEFAULT_QUALITY,
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+    inputImages,
+  } = options;
 
   if (!prompt.trim()) {
     return { success: false, error: 'Prompt cannot be empty' };
@@ -80,12 +153,22 @@ export async function generateImage(options: ImageOptions): Promise<ImageResult>
     return { success: false, error: 'No image generation provider available. Set OPENAI_API_KEY or GEMINI_API_KEY.' };
   }
 
-  // Generate image
-  if (provider === 'openai') {
-    return generateWithOpenAI({ prompt, outputDir, timestamp, slug, size, quality, timeoutMs });
+  // Resolve input images if provided
+  let resolvedImages: ResolvedImage[] | undefined;
+  if (inputImages && inputImages.length > 0) {
+    try {
+      resolvedImages = await Promise.all(inputImages.map(resolveInputImage));
+    } catch (err: any) {
+      return { success: false, error: `Failed to load input image: ${err.message}` };
+    }
   }
 
-  return generateWithGemini({ prompt, outputDir, timestamp, slug, timeoutMs });
+  // Generate image
+  if (provider === 'openai') {
+    return generateWithOpenAI({ prompt, outputDir, timestamp, slug, size, quality, timeoutMs, inputImages: resolvedImages });
+  }
+
+  return generateWithGemini({ prompt, outputDir, timestamp, slug, timeoutMs, inputImages: resolvedImages });
 }
 
 /**
@@ -126,10 +209,11 @@ interface OpenAIImageParams {
   size: string;
   quality: string;
   timeoutMs: number;
+  inputImages?: ResolvedImage[];
 }
 
 async function generateWithOpenAI(params: OpenAIImageParams): Promise<ImageResult> {
-  const { prompt, outputDir, timestamp, slug, size, quality, timeoutMs } = params;
+  const { prompt, outputDir, timestamp, slug, size, quality, timeoutMs, inputImages } = params;
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     return { success: false, error: 'OPENAI_API_KEY not set' };
@@ -140,22 +224,55 @@ async function generateWithOpenAI(params: OpenAIImageParams): Promise<ImageResul
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      const response = await fetch('https://api.openai.com/v1/images/generations', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'gpt-image-1',
-          prompt,
-          size,
-          quality,
-          n: 1,
-          output_format: 'png',
-        }),
-        signal: controller.signal,
-      });
+      let response: Response;
+
+      if (inputImages && inputImages.length > 0) {
+        // Use the images/edits endpoint for image-to-image generation
+        const formData = new FormData();
+
+        // Add the first image as the base image
+        const firstImage = inputImages[0];
+        // Convert Buffer to ArrayBuffer for Blob compatibility
+        const arrayBuffer = firstImage.data.buffer.slice(
+          firstImage.data.byteOffset,
+          firstImage.data.byteOffset + firstImage.data.byteLength
+        ) as ArrayBuffer;
+        const imageBlob = new Blob([arrayBuffer], { type: firstImage.mimeType });
+        formData.append('image', imageBlob, 'input.png');
+
+        formData.append('prompt', prompt);
+        formData.append('model', 'gpt-image-1');
+        formData.append('size', size);
+        formData.append('quality', quality);
+        formData.append('n', '1');
+
+        response = await fetch('https://api.openai.com/v1/images/edits', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: formData,
+          signal: controller.signal,
+        });
+      } else {
+        // Standard text-to-image generation
+        response = await fetch('https://api.openai.com/v1/images/generations', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'gpt-image-1',
+            prompt,
+            size,
+            quality,
+            n: 1,
+            output_format: 'png',
+          }),
+          signal: controller.signal,
+        });
+      }
 
       if (!response.ok) {
         const err = await response.text();
@@ -210,10 +327,11 @@ interface GeminiImageParams {
   timestamp: number;
   slug: string;
   timeoutMs: number;
+  inputImages?: ResolvedImage[];
 }
 
 async function generateWithGemini(params: GeminiImageParams): Promise<ImageResult> {
-  const { prompt, outputDir, timestamp, slug, timeoutMs } = params;
+  const { prompt, outputDir, timestamp, slug, inputImages } = params;
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     return { success: false, error: 'GEMINI_API_KEY not set' };
@@ -223,9 +341,33 @@ async function generateWithGemini(params: GeminiImageParams): Promise<ImageResul
     const { GoogleGenAI } = await import('@google/genai');
     const client = new GoogleGenAI({ apiKey });
 
+    // Build contents with optional input images
+    let contents: any;
+    if (inputImages && inputImages.length > 0) {
+      // Include images in the content for multimodal input
+      const parts: any[] = [];
+
+      // Add input images first
+      for (const img of inputImages) {
+        parts.push({
+          inlineData: {
+            mimeType: img.mimeType,
+            data: img.data.toString('base64'),
+          },
+        });
+      }
+
+      // Add the text prompt
+      parts.push({ text: prompt });
+
+      contents = [{ role: 'user', parts }];
+    } else {
+      contents = prompt;
+    }
+
     const response = await client.models.generateContent({
       model: 'gemini-2.0-flash-preview-image-generation',
-      contents: prompt,
+      contents,
       config: {
         responseModalities: ['IMAGE'],
       },
@@ -276,15 +418,26 @@ export function createImageCaption(prompt: string, maxLength = 100): string {
 export const imageGenTool: ScoobyToolDefinition = {
   name: 'image_gen',
   description:
-    'Generate an image from a text prompt. Uses OpenAI (gpt-image-1) if OPENAI_API_KEY is set, or Gemini if GEMINI_API_KEY is set.',
+    'Generate an image from a text prompt, optionally using reference images. Uses OpenAI (gpt-image-1) if OPENAI_API_KEY is set, or Gemini if GEMINI_API_KEY is set.',
   inputSchema: z.object({
-    prompt: z.string().describe('Image description'),
+    prompt: z.string().describe('Image description or editing instructions'),
     provider: z
       .enum(['openai', 'gemini'])
       .optional()
       .describe('Provider to use. Auto-detected from env if omitted.'),
     size: z.string().optional().default('1024x1024').describe('Image size (e.g. "1024x1024")'),
     quality: z.string().optional().default('auto').describe('Quality setting (low, medium, high, auto)'),
+    inputImages: z
+      .array(
+        z.object({
+          localPath: z.string().optional().describe('Path to a local image file'),
+          url: z.string().optional().describe('URL to fetch the image from'),
+          data: z.string().optional().describe('Base64-encoded image data'),
+          mimeType: z.string().optional().describe('MIME type of the image'),
+        })
+      )
+      .optional()
+      .describe('Optional input images for image-to-image generation or editing'),
   }),
   async execute(input, ctx) {
     const imagesDir = join(ctx.workspace.path, 'data', 'images');
@@ -295,6 +448,7 @@ export const imageGenTool: ScoobyToolDefinition = {
       provider: input.provider,
       size: input.size,
       quality: input.quality,
+      inputImages: input.inputImages,
     });
 
     if (!result.success) {

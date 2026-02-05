@@ -53,6 +53,7 @@ export {
   type ImageResult,
   type ImageOptions,
   type ImageProvider,
+  type InputImage,
 } from './tools/impl/image-gen.js';
 export { audioTranscribeTool } from './tools/impl/audio-transcribe.js';
 export {
