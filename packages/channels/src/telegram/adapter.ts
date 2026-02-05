@@ -109,14 +109,17 @@ export class TelegramAdapter implements ChannelAdapter {
     });
 
     this.bot.on('message:photo', async (ctx: Context) => {
+      console.log('[Telegram] Received photo message');
       if (!ctx.message?.photo || !ctx.from) return;
 
       // Telegram sends multiple sizes, get the largest one
       const photos = ctx.message.photo;
       const largestPhoto = photos[photos.length - 1];
+      console.log(`[Telegram] Photo file_id: ${largestPhoto.file_id}, caption: "${ctx.message.caption ?? ''}"`);
 
       try {
         const localPath = await this.downloadTelegramFile(largestPhoto.file_id, 'jpg', 'scooby-images');
+        console.log(`[Telegram] Photo downloaded to: ${localPath}`);
 
         const msg: InboundMessage = {
           channelType: 'telegram',
@@ -136,6 +139,7 @@ export class TelegramAdapter implements ChannelAdapter {
           raw: ctx.message,
         };
 
+        console.log(`[Telegram] Calling ${this.handlers.length} handlers with photo message`);
         for (const handler of this.handlers) {
           await handler(msg);
         }
