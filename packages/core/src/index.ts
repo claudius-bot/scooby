@@ -41,7 +41,19 @@ export { sendMessageTool } from './tools/impl/send-message.js';
 export { memorySearchTool } from './tools/impl/memory-search.js';
 export { webSearchTool } from './tools/impl/web-search.js';
 export { webFetchTool } from './tools/impl/web-fetch.js';
-export { imageGenTool } from './tools/impl/image-gen.js';
+export {
+  imageGenTool,
+  generateImage,
+  resolveImageProvider,
+  isImageProviderConfigured,
+  createImageCaption,
+  IMAGE_MAX_PROMPT_LENGTH,
+  IMAGE_SIZES,
+  IMAGE_QUALITIES,
+  type ImageResult,
+  type ImageOptions,
+  type ImageProvider,
+} from './tools/impl/image-gen.js';
 export { audioTranscribeTool } from './tools/impl/audio-transcribe.js';
 export {
   ttsTool,
