@@ -60,7 +60,7 @@ import {
   type InboundMessage,
   type ChannelAdapter,
 } from '@scooby/channels';
-import { GatewayServer } from '@scooby/gateway';
+import { GatewayServer, createChatCompletionsApi } from '@scooby/gateway';
 import {
   CommandProcessor,
   createDefaultRegistry,
@@ -483,6 +483,48 @@ async function main() {
       },
     },
   );
+
+  // Mount chat completions endpoint if enabled
+  if (config.gateway?.http?.endpoints?.chatCompletions?.enabled) {
+    const chatApi = createChatCompletionsApi({
+      authToken: config.gateway?.auth?.token,
+      listWorkspaceIds: () => Array.from(workspaces.keys()),
+      getWorkspace: async (id) => {
+        const ws = workspaces.get(id);
+        if (!ws) return null;
+        return { id: ws.id, path: ws.path, agent: ws.agent, permissions: ws.permissions };
+      },
+      getSessionManager: (id) => sessionManagers.get(id)!,
+      getMemoryProvider: (id) => memoryProviders.get(id),
+      getMemoryService: (id) => memoryServices.get(id),
+      createAgentRunner: (_id) => new AgentRunner(toolRegistry, cooldowns, sessionManagers.get(_id)!),
+      getToolContext: (workspaceId, sessionId) => {
+        const ws = workspaces.get(workspaceId)!;
+        const memProvider = memoryProviders.get(workspaceId);
+        return {
+          workspace: { id: ws.id, path: ws.path },
+          session: { id: sessionId, workspaceId },
+          permissions: ws.permissions,
+          conversation: { channelType: 'api', conversationId: sessionId },
+          sendMessage,
+          memoryService: memoryServices.get(workspaceId),
+          memoryProvider: memProvider,
+          citationsEnabled: resolveCitations(config.memory, memProvider?.backendName ?? 'builtin'),
+        };
+      },
+      getGlobalModels: () => ({
+        fast: config.models.fast.candidates,
+        slow: config.models.slow.candidates,
+      }),
+      getUsageTracker: (id) => usageTrackers.get(id),
+      resolveCitations: (workspaceId) => {
+        const memProvider = memoryProviders.get(workspaceId);
+        return resolveCitations(config.memory, memProvider?.backendName ?? 'builtin');
+      },
+    });
+    gateway.getApp().route('/', chatApi);
+    console.log('[Scooby] Chat Completions endpoint enabled at /v1/chat/completions');
+  }
 
   // Register WebSocket method handlers
   gateway.registerMethod('chat.send', async (connectionId, params) => {

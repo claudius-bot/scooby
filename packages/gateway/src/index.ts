@@ -4,3 +4,4 @@ export * from './server.js';
 export * from './protocol.js';
 export * from './connections.js';
 export * from './api.js';
+export * from './chat-completions.js';
