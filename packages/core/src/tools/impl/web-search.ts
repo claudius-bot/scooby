@@ -1,41 +1,16 @@
 import { z } from 'zod';
 import type { ScoobyToolDefinition } from '../types.js';
+import { TtlCache } from './ttl-cache.js';
 
 const BRAVE_SEARCH_ENDPOINT = 'https://api.search.brave.com/res/v1/web/search';
 const DEFAULT_COUNT = 5;
 const MAX_COUNT = 10;
-const CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
-const MAX_CACHE_ENTRIES = 100;
 const TIMEOUT_MS = 30_000;
 
 const FRESHNESS_SHORTCUTS = new Set(['pd', 'pw', 'pm', 'py']);
 const FRESHNESS_RANGE_RE = /^(\d{4}-\d{2}-\d{2})to(\d{4}-\d{2}-\d{2})$/;
 
-// Simple in-memory cache
-interface CacheEntry {
-  data: Record<string, unknown>;
-  expiresAt: number;
-}
-const cache = new Map<string, CacheEntry>();
-
-function readCache(key: string): Record<string, unknown> | null {
-  const entry = cache.get(key);
-  if (!entry) return null;
-  if (Date.now() > entry.expiresAt) {
-    cache.delete(key);
-    return null;
-  }
-  return entry.data;
-}
-
-function writeCache(key: string, data: Record<string, unknown>): void {
-  // Evict oldest entries if cache is full
-  if (cache.size >= MAX_CACHE_ENTRIES) {
-    const firstKey = cache.keys().next().value as string;
-    cache.delete(firstKey);
-  }
-  cache.set(key, { data, expiresAt: Date.now() + CACHE_TTL_MS });
-}
+const cache = new TtlCache<Record<string, unknown>>({ ttlMs: 15 * 60 * 1000, maxEntries: 100 });
 
 function normalizeFreshness(value: string | undefined): string | undefined {
   if (!value) return undefined;
@@ -110,7 +85,7 @@ export const webSearchTool: ScoobyToolDefinition = {
 
     // Check cache
     const cacheKey = `brave:${input.query}:${count}:${input.country || ''}:${input.search_lang || ''}:${freshness || ''}`;
-    const cached = readCache(cacheKey);
+    const cached = cache.get(cacheKey);
     if (cached) {
       return JSON.stringify({ ...cached, cached: true });
     }
@@ -170,7 +145,7 @@ export const webSearchTool: ScoobyToolDefinition = {
         results,
       };
 
-      writeCache(cacheKey, payload);
+      cache.set(cacheKey, payload);
       return JSON.stringify(payload);
     } catch (err: any) {
       return JSON.stringify({

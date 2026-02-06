@@ -1,5 +1,4 @@
 import { createOpenAI } from '@ai-sdk/openai';
-import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGateway, type LanguageModel, type EmbeddingModel } from 'ai';
 
 type ProviderFactory = {

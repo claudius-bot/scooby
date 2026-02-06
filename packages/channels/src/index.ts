@@ -2,5 +2,6 @@
 
 export * from './types.js';
 export * from './message-queue.js';
+export { markdownToText, markdownToTelegramV2, prepareOutboundText } from './format.js';
 export * from './telegram/adapter.js';
 export * from './webchat/adapter.js';

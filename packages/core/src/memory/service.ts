@@ -85,11 +85,14 @@ export class MemoryService {
 
     try {
       const files = await readdir(memoryDir);
-      for (const file of files) {
-        if (!file.endsWith('.md')) continue;
-        const content = await readFile(join(memoryDir, file), 'utf-8');
-        const count = await this.index(workspaceId, file, content);
-        totalChunks += count;
+      const mdFiles = files.filter((f) => f.endsWith('.md'));
+      const contents = await Promise.all(
+        mdFiles.map((f) =>
+          readFile(join(memoryDir, f), 'utf-8').then((content) => ({ file: f, content }))
+        ),
+      );
+      for (const { file, content } of contents) {
+        totalChunks += await this.index(workspaceId, file, content);
       }
     } catch {
       // Memory directory may not exist yet -- that is fine

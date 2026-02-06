@@ -6,17 +6,36 @@ import type { ScoobyToolDefinition } from '../types.js';
 // not from whichever package is running the process (e.g. apps/bot).
 const require = createRequire(import.meta.url);
 
+const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+
 let browser: any = null;
 let page: any = null;
+let idleTimer: ReturnType<typeof setTimeout> | null = null;
+
+function resetIdleTimer(): void {
+  if (idleTimer) clearTimeout(idleTimer);
+  idleTimer = setTimeout(async () => {
+    if (browser) {
+      await browser.close().catch(() => {});
+      browser = null;
+      page = null;
+      idleTimer = null;
+    }
+  }, IDLE_TIMEOUT_MS);
+}
 
 async function getPage(): Promise<any> {
-  if (page && !page.isClosed()) return page;
+  if (page && !page.isClosed()) {
+    resetIdleTimer();
+    return page;
+  }
 
   const { chromium } = require('playwright');
   if (!browser || !browser.isConnected()) {
     browser = await chromium.launch({ headless: true });
   }
   page = await browser.newPage();
+  resetIdleTimer();
   return page;
 }
 
@@ -36,6 +55,10 @@ export const browserTool: ScoobyToolDefinition = {
   async execute(input, _ctx) {
     try {
       if (input.action === 'close') {
+        if (idleTimer) {
+          clearTimeout(idleTimer);
+          idleTimer = null;
+        }
         if (browser) {
           await browser.close();
           browser = null;

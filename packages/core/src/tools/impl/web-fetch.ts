@@ -7,39 +7,16 @@ import {
   truncateText,
   type ExtractMode,
 } from './web-fetch-utils.js';
+import { TtlCache } from './ttl-cache.js';
 
 const DEFAULT_MAX_CHARS = 50_000;
 const DEFAULT_MAX_REDIRECTS = 3;
 const DEFAULT_ERROR_MAX_CHARS = 4_000;
 const TIMEOUT_MS = 30_000;
-const CACHE_TTL_MS = 15 * 60 * 1000;
-const MAX_CACHE_ENTRIES = 100;
 const USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
 
-interface CacheEntry {
-  data: Record<string, unknown>;
-  expiresAt: number;
-}
-const cache = new Map<string, CacheEntry>();
-
-function readCache(key: string): Record<string, unknown> | null {
-  const entry = cache.get(key);
-  if (!entry) return null;
-  if (Date.now() > entry.expiresAt) {
-    cache.delete(key);
-    return null;
-  }
-  return entry.data;
-}
-
-function writeCache(key: string, data: Record<string, unknown>): void {
-  if (cache.size >= MAX_CACHE_ENTRIES) {
-    const firstKey = cache.keys().next().value as string;
-    cache.delete(firstKey);
-  }
-  cache.set(key, { data, expiresAt: Date.now() + CACHE_TTL_MS });
-}
+const cache = new TtlCache<Record<string, unknown>>({ ttlMs: 15 * 60 * 1000, maxEntries: 100 });
 
 function isRedirectStatus(status: number): boolean {
   return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
@@ -140,7 +117,7 @@ export const webFetchTool: ScoobyToolDefinition = {
 
     // Check cache
     const cacheKey = `fetch:${url}:${extractMode}:${maxChars}`.toLowerCase();
-    const cached = readCache(cacheKey);
+    const cached = cache.get(cacheKey);
     if (cached) {
       return JSON.stringify({ ...cached, cached: true });
     }
@@ -219,7 +196,7 @@ export const webFetchTool: ScoobyToolDefinition = {
         text: truncated.text,
       };
 
-      writeCache(cacheKey, payload);
+      cache.set(cacheKey, payload);
       return JSON.stringify(payload);
     } catch (err: any) {
       return JSON.stringify({

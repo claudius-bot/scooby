@@ -26,7 +26,6 @@ export const MODEL_PRICING: Record<string, { input: number; output: number }> = 
  * Returns zero cost if the model isn't in the pricing table.
  */
 export function estimateCost(
-  _provider: string,
   model: string,
   tokens: { input: number; output: number },
 ): { input: number; output: number; total: number } {

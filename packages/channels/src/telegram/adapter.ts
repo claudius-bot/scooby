@@ -11,6 +11,7 @@ export interface TelegramAdapterConfig {
 
 export class TelegramAdapter implements ChannelAdapter {
   type = 'telegram' as const;
+  outputFormat = 'telegram' as const;
   private bot: Bot;
   private handlers: MessageHandler[] = [];
 
@@ -273,7 +274,7 @@ export class TelegramAdapter implements ChannelAdapter {
     }
 
     const caption = attachment.caption
-      ? (useMarkdown ? escapeMarkdownV2(attachment.caption) : attachment.caption)
+      ? (useMarkdown ? escapeTelegramPlainText(attachment.caption) : attachment.caption)
       : undefined;
 
     const replyTo = replyToMessageId ? Number(replyToMessageId) : undefined;
@@ -316,18 +317,16 @@ export class TelegramAdapter implements ChannelAdapter {
     useMarkdown: boolean,
     replyToMessageId?: string,
   ): Promise<void> {
-    const escapedText = useMarkdown ? escapeMarkdownV2(text) : text;
-
     // Telegram has 4096 char limit per message
     const MAX_LEN = 4096;
-    if (escapedText.length <= MAX_LEN) {
-      await this.bot.api.sendMessage(chatId, escapedText, {
+    if (text.length <= MAX_LEN) {
+      await this.bot.api.sendMessage(chatId, text, {
         parse_mode: useMarkdown ? 'MarkdownV2' : undefined,
         reply_to_message_id: replyToMessageId ? Number(replyToMessageId) : undefined,
       });
     } else {
       // Split into chunks at newline boundaries where possible
-      const chunks = this.splitMessage(escapedText, MAX_LEN);
+      const chunks = this.splitMessage(text, MAX_LEN);
       for (const chunk of chunks) {
         await this.bot.api.sendMessage(chatId, chunk, {
           parse_mode: useMarkdown ? 'MarkdownV2' : undefined,
@@ -359,26 +358,11 @@ export class TelegramAdapter implements ChannelAdapter {
 }
 
 /**
- * Escape text for Telegram MarkdownV2 format.
+ * Escape plain text for use in Telegram MarkdownV2 captions.
  *
- * MarkdownV2 requires these characters to be escaped with a preceding backslash
- * when they appear outside of formatting entities:
+ * MarkdownV2 requires these characters to be escaped with a preceding backslash:
  *   _ * [ ] ( ) ~ ` > # + - = | { } . !
- *
- * The agent produces standard markdown, so we escape everything outside of
- * code blocks (``` ... ```) and inline code (` ... `), which Telegram renders
- * literally and where escaping would be visible.
  */
-function escapeMarkdownV2(text: string): string {
-  // Split on code fences and inline code to avoid escaping inside them.
-  // Matches triple-backtick blocks first, then single-backtick spans.
-  const parts = text.split(/(```[\s\S]*?```|`[^`]*`)/);
-  return parts
-    .map((part, i) => {
-      // Odd indices are the captured code blocks/spans — leave them alone
-      if (i % 2 === 1) return part;
-      // Even indices are regular text — escape reserved characters
-      return part.replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, '\\$1');
-    })
-    .join('');
+function escapeTelegramPlainText(text: string): string {
+  return text.replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, '\\$1');
 }

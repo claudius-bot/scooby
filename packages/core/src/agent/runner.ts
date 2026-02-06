@@ -261,7 +261,7 @@ export class AgentRunner {
           output: totalCompletionTokens,
           total: totalPromptTokens + totalCompletionTokens,
         };
-        const cost = estimateCost(selection.candidate.provider, selection.candidate.model, tokens);
+        const cost = estimateCost(selection.candidate.model, tokens);
         await options.usageTracker.record({
           timestamp: new Date().toISOString(),
           workspaceId: options.workspaceId,

@@ -4,12 +4,25 @@ import { createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
 
 export class JsonlStore<T> {
+  private dirEnsured = false;
+
   constructor(private filePath: string) {}
 
+  private async ensureDir(): Promise<void> {
+    if (this.dirEnsured) return;
+    await mkdir(dirname(this.filePath), { recursive: true });
+    this.dirEnsured = true;
+  }
+
   async append(entry: T): Promise<void> {
-    const dir = dirname(this.filePath);
-    await mkdir(dir, { recursive: true });
+    await this.ensureDir();
     await appendFile(this.filePath, JSON.stringify(entry) + '\n', 'utf-8');
+  }
+
+  async rewrite(entries: T[]): Promise<void> {
+    await this.ensureDir();
+    const lines = entries.map((entry) => JSON.stringify(entry)).join('\n');
+    await writeFile(this.filePath, lines.length > 0 ? lines + '\n' : '', 'utf-8');
   }
 
   async *read(): AsyncGenerator<T> {
@@ -54,9 +67,7 @@ export class JsonlStore<T> {
     const all = await this.readAll();
     const kept = filter ? all.filter(filter) : all;
 
-    const dir = dirname(this.filePath);
-    await mkdir(dir, { recursive: true });
-
+    await this.ensureDir();
     const lines = kept.map((entry) => JSON.stringify(entry)).join('\n');
     await writeFile(this.filePath, lines.length > 0 ? lines + '\n' : '', 'utf-8');
 
