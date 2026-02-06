@@ -110,6 +110,10 @@ export class MemoryService {
     return results.map((r) => `[${r.chunk.source}] ${r.chunk.content}`);
   }
 
+  deleteBySourcePrefix(workspaceId: string, sourcePrefix: string): void {
+    this.store.deleteBySourcePrefix(workspaceId, sourcePrefix);
+  }
+
   close(): void {
     this.store.close();
   }

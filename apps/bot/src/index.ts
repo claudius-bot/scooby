@@ -22,6 +22,9 @@ import {
   loadUsageSummary,
   transcriptToMessages,
   type TranscriptContentPart,
+  generateWithFailover,
+  getLanguageModel,
+  type FailoverCandidate,
   shellExecTool,
   fileReadTool,
   fileWriteTool,
@@ -120,6 +123,65 @@ async function main() {
     sessionManagers.set(id, mgr);
   }
 
+  // 5a. Conversation summarization on session archive
+  const summarizeSession = async (sessionId: string, workspaceId: string, mgr: SessionManager) => {
+    const memService = memoryServices.get(workspaceId);
+    if (!memService) return;
+
+    const transcript = await mgr.getTranscript(sessionId);
+    if (transcript.length < 2) return;
+
+    // Build plain-text conversation
+    const lines: string[] = [];
+    for (const entry of transcript) {
+      let text = '';
+      if (typeof entry.content === 'string') {
+        text = entry.content;
+      } else if (Array.isArray(entry.content)) {
+        text = entry.content
+          .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
+          .map((p) => p.text)
+          .join(' ');
+      }
+      if (text.trim()) {
+        lines.push(`${entry.role}: ${text.trim()}`);
+      }
+    }
+
+    const conversationText = lines.join('\n');
+    if (conversationText.length < 100) return;
+
+    try {
+      const candidates: FailoverCandidate[] = config.models.fast.candidates.map((c) => ({
+        model: getLanguageModel(c.provider, c.model),
+        candidate: c,
+      }));
+
+      const result = await generateWithFailover({
+        candidates,
+        system: 'You are a concise summarizer. Summarize the following conversation in 2-4 sentences, capturing the key topics discussed, decisions made, and any important context that would be useful to recall later. Focus on facts and outcomes, not pleasantries.',
+        messages: [{ role: 'user', content: conversationText }],
+        cooldowns,
+      });
+
+      const summary = typeof result.text === 'string' ? result.text : '';
+      if (summary.trim()) {
+        await memService.index(workspaceId, `conversation-summary:${sessionId}`, summary);
+        console.log(`[Scooby] Summarized session ${sessionId.slice(0, 8)}... for workspace ${workspaceId}`);
+      }
+    } catch (err) {
+      console.error(`[Scooby] Failed to summarize session ${sessionId.slice(0, 8)}...:`, err);
+    }
+  };
+
+  for (const [id, mgr] of sessionManagers) {
+    mgr.onArchive((sid, wid) => {
+      summarizeSession(sid, wid, mgr).catch((err) => {
+        console.error(`[Scooby] Summarization error:`, err);
+      });
+    });
+  }
+
   // 5b. Create usage trackers per workspace
   const usageTrackers = new Map<string, UsageTracker>();
   for (const [id, ws] of workspaces) {
@@ -198,6 +260,12 @@ async function main() {
     });
     sessionManagers.set(ws.id, mgr);
     usageTrackers.set(ws.id, new UsageTracker(resolve(ws.path, 'data')));
+
+    mgr.onArchive((sid, wid) => {
+      summarizeSession(sid, wid, mgr).catch((err) => {
+        console.error(`[Scooby] Summarization error:`, err);
+      });
+    });
 
     return ws;
   };
@@ -351,6 +419,19 @@ async function main() {
       generateWorkspaceCode: () => {
         return codeManager.generate(workspaceId);
       },
+      searchMemory: memoryServices.get(workspaceId) ? async (query: string) => {
+        const memService = memoryServices.get(workspaceId)!;
+        const results = await memService.search(workspaceId, query);
+        return results.map((r) => ({ source: r.chunk.source, content: r.chunk.content, score: r.score }));
+      } : undefined,
+      addMemory: memoryServices.get(workspaceId) ? async (text: string) => {
+        const memService = memoryServices.get(workspaceId)!;
+        return memService.index(workspaceId, `user-note:${Date.now()}`, text);
+      } : undefined,
+      clearMemory: memoryServices.get(workspaceId) ? async () => {
+        const memService = memoryServices.get(workspaceId)!;
+        memService.deleteBySourcePrefix(workspaceId, 'user-note:');
+      } : undefined,
       createWorkspace: makeCreateWorkspace('webchat', connectionId),
       getAccessibleWorkspaces: async (): Promise<WorkspaceInfo[]> => {
         const accessibleIds = channelAccess.getAccessibleWorkspaces('webchat', connectionId);
@@ -589,6 +670,19 @@ async function main() {
       generateWorkspaceCode: () => {
         return codeManager.generate(workspaceId);
       },
+      searchMemory: memoryServices.get(workspaceId) ? async (query: string) => {
+        const memService = memoryServices.get(workspaceId)!;
+        const results = await memService.search(workspaceId, query);
+        return results.map((r) => ({ source: r.chunk.source, content: r.chunk.content, score: r.score }));
+      } : undefined,
+      addMemory: memoryServices.get(workspaceId) ? async (text: string) => {
+        const memService = memoryServices.get(workspaceId)!;
+        return memService.index(workspaceId, `user-note:${Date.now()}`, text);
+      } : undefined,
+      clearMemory: memoryServices.get(workspaceId) ? async () => {
+        const memService = memoryServices.get(workspaceId)!;
+        memService.deleteBySourcePrefix(workspaceId, 'user-note:');
+      } : undefined,
       createWorkspace: makeCreateWorkspace(msg.channelType, msg.conversationId),
       getAccessibleWorkspaces: async (): Promise<WorkspaceInfo[]> => {
         const accessibleIds = channelAccess.getAccessibleWorkspaces(msg.channelType, msg.conversationId);

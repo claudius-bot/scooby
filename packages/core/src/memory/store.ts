@@ -128,6 +128,25 @@ export class MemoryStore {
     transaction();
   }
 
+  deleteBySourcePrefix(workspaceId: string, sourcePrefix: string): void {
+    const chunks = this.db
+      .prepare('SELECT id FROM chunks WHERE workspace_id = ? AND source LIKE ?')
+      .all(workspaceId, `${sourcePrefix}%`) as Array<{ id: string }>;
+
+    const deleteChunkStmt = this.db.prepare('DELETE FROM chunks WHERE id = ?');
+
+    const transaction = this.db.transaction(() => {
+      for (const c of chunks) {
+        deleteChunkStmt.run(c.id);
+        if (this.vecAvailable) {
+          this.db.prepare('DELETE FROM chunk_embeddings WHERE chunk_id = ?').run(c.id);
+        }
+      }
+    });
+
+    transaction();
+  }
+
   vectorSearch(workspaceId: string, embedding: number[], limit: number = 6): SearchResult[] {
     if (!this.vecAvailable) return [];
 

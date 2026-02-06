@@ -30,6 +30,11 @@ export interface ProcessMessageOptions {
   getSkills?: () => Promise<SkillDefinition[]>;
   generateWorkspaceCode?: () => string;
 
+  // Memory
+  searchMemory?: (query: string) => Promise<Array<{ source: string; content: string; score: number }>>;
+  addMemory?: (text: string) => Promise<number>;
+  clearMemory?: () => Promise<void>;
+
   // Workspace management
   createWorkspace?: (name: string) => Promise<{ workspaceId: string; code: string }>;
   getAccessibleWorkspaces?: () => Promise<WorkspaceInfo[]>;
@@ -85,6 +90,9 @@ export class CommandProcessor {
       getUsageSummary: opts.getUsageSummary,
       getSkills: opts.getSkills,
       generateWorkspaceCode: opts.generateWorkspaceCode,
+      searchMemory: opts.searchMemory,
+      addMemory: opts.addMemory,
+      clearMemory: opts.clearMemory,
       createWorkspace: opts.createWorkspace,
       getAccessibleWorkspaces: opts.getAccessibleWorkspaces,
       switchWorkspace: opts.switchWorkspace,

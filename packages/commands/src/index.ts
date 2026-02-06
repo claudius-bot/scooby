@@ -22,6 +22,7 @@ export {
   createSwitchCommand,
   createTtsCommand,
   createImageCommand,
+  createMemoryCommand,
 } from './handlers/index.js';
 
 import { CommandRegistry } from './registry.js';
@@ -38,6 +39,7 @@ import {
   createSwitchCommand,
   createTtsCommand,
   createImageCommand,
+  createMemoryCommand,
 } from './handlers/index.js';
 
 /**
@@ -59,6 +61,7 @@ export function createDefaultRegistry(): CommandRegistry {
   registry.register(createSwitchCommand());
   registry.register(createTtsCommand());
   registry.register(createImageCommand());
+  registry.register(createMemoryCommand());
 
   // Help command needs registry to list commands
   registry.register(createHelpCommand(registry));
