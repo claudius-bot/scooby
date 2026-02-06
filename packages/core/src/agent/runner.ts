@@ -51,6 +51,8 @@ export interface AgentRunOptions {
   usageTracker?: UsageTracker;
   agentName?: string;
   channelType?: string;
+  citationsEnabled?: boolean;
+  memoryBackend?: string;
 }
 
 const providerEnvKeys: Record<string, string> = {
@@ -92,6 +94,8 @@ export class AgentRunner {
       timestamp: new Date(),
       workspaceId: options.workspaceId,
       workspacePath: options.workspacePath,
+      citationsEnabled: options.citationsEnabled,
+      memoryBackend: options.memoryBackend,
     };
     const systemPrompt = buildSystemPrompt(promptCtx);
 

@@ -54,6 +54,11 @@ export interface CommandContext {
   getSkills?: () => Promise<SkillDefinition[]>;
   generateWorkspaceCode?: () => string;
 
+  // Memory
+  searchMemory?: (query: string) => Promise<Array<{ source: string; content: string; score: number }>>;
+  addMemory?: (text: string) => Promise<number>;
+  clearMemory?: () => Promise<void>;
+
   // Workspace management
   /** Create a new workspace and return a code to join it. */
   createWorkspace?: (name: string, options?: { description?: string }) => Promise<{ workspaceId: string; code: string }>;

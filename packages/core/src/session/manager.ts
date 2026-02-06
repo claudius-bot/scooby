@@ -15,9 +15,26 @@ export interface SessionManagerConfig {
 export class SessionManager {
   private metaStore: JsonStore<Record<SessionKey, SessionMetadata>>;
   private transcriptStores = new Map<string, JsonlStore<TranscriptEntry>>();
+  private archiveCallbacks: Array<(sessionId: string, workspaceId: string) => void> = [];
+  private flushedSessions = new Set<string>();
 
   constructor(private config: SessionManagerConfig) {
     this.metaStore = new JsonStore(join(config.sessionsDir, 'sessions.json'));
+  }
+
+  onArchive(cb: (sessionId: string, workspaceId: string) => void): void {
+    this.archiveCallbacks.push(cb);
+  }
+
+  private notifyArchive(sessionId: string): void {
+    for (const cb of this.archiveCallbacks) {
+      try {
+        cb(sessionId, this.config.workspaceId);
+      } catch (err) {
+        // Archive callbacks must never block archival
+        console.error('[SessionManager] Archive callback error:', err);
+      }
+    }
   }
 
   async getOrCreate(channelType: string, conversationId: string): Promise<SessionMetadata> {
@@ -31,6 +48,7 @@ export class SessionManager {
       if (this.isSessionIdle(existing)) {
         // Archive the old session and create a new one
         existing.status = 'archived';
+        this.notifyArchive(existing.id);
         sessions[key] = existing;
         const newSession = this.createSessionMetadata(channelType, conversationId);
         sessions[key] = newSession;
@@ -117,10 +135,12 @@ export class SessionManager {
     if (archivedIds.length > 0) {
       await this.metaStore.write(sessions);
 
-      // Compact transcripts for archived sessions and free stores from memory
+      // Notify archive callbacks and compact transcripts for archived sessions
       for (const id of archivedIds) {
+        this.notifyArchive(id);
         await this.compactTranscript(id);
         this.transcriptStores.delete(id);
+        this.flushedSessions.delete(id);
       }
     }
 
@@ -139,8 +159,19 @@ export class SessionManager {
       return sessions;
     });
 
+    this.notifyArchive(sessionId);
     await this.compactTranscript(sessionId);
     this.transcriptStores.delete(sessionId);
+    this.flushedSessions.delete(sessionId);
+  }
+
+  shouldFlush(sessionId: string, messageCount: number): boolean {
+    if (this.flushedSessions.has(sessionId)) return false;
+    return messageCount >= this.config.maxTranscriptLines * 0.80;
+  }
+
+  markFlushed(sessionId: string): void {
+    this.flushedSessions.add(sessionId);
   }
 
   private getTranscriptStore(sessionId: string): JsonlStore<TranscriptEntry> {

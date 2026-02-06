@@ -7,6 +7,7 @@ import {
   loadWorkspace,
   type Workspace,
   type ScoobyConfig,
+  type MemoryConfig,
   ToolRegistry,
   type ToolContext,
   type OutboundMessage,
@@ -15,6 +16,10 @@ import {
   AgentRunner,
   CooldownTracker,
   MemoryService,
+  type MemorySearchProvider,
+  BuiltinSearchProvider,
+  FallbackSearchProvider,
+  QmdMemoryManager,
   CronScheduler,
   Heartbeat,
   WebhookManager,
@@ -22,6 +27,9 @@ import {
   loadUsageSummary,
   transcriptToMessages,
   type TranscriptContentPart,
+  generateWithFailover,
+  getLanguageModel,
+  type FailoverCandidate,
   shellExecTool,
   fileReadTool,
   fileWriteTool,
@@ -36,6 +44,8 @@ import {
   ttsTool,
   scratchpadReadTool,
   scratchpadWriteTool,
+  memoryGetTool,
+  memoryWriteTool,
   loadSkills,
 } from '@scooby/core';
 import {
@@ -90,17 +100,56 @@ async function main() {
 
   // 4. Initialize memory services per workspace
   const memoryServices = new Map<string, MemoryService>();
-  if (config.models.embedding) {
-    for (const [id, ws] of workspaces) {
-      const dbPath = resolve(ws.path, 'data', 'memory.db');
-      const memService = new MemoryService({
-        dbPath,
-        embeddingConfig: config.models.embedding,
+  const memoryProviders = new Map<string, MemorySearchProvider>();
+
+  function resolveCitations(memoryConfig: MemoryConfig | undefined, backendName: string): boolean {
+    const mode = memoryConfig?.citations ?? 'auto';
+    if (mode === 'on') return true;
+    if (mode === 'off') return false;
+    return backendName.startsWith('qmd'); // auto: on when QMD is active
+  }
+
+  async function createMemoryProvider(
+    workspaceId: string,
+    workspacePath: string,
+    embeddingConfig: typeof config.models.embedding,
+    memoryConfig: MemoryConfig | undefined,
+  ): Promise<{ provider: MemorySearchProvider | null; builtinService: MemoryService | null }> {
+    let builtinService: MemoryService | null = null;
+    let builtinProvider: BuiltinSearchProvider | null = null;
+
+    if (embeddingConfig) {
+      const dbPath = resolve(workspacePath, 'data', 'memory.db');
+      builtinService = new MemoryService({ dbPath, embeddingConfig });
+      builtinProvider = new BuiltinSearchProvider(builtinService);
+    }
+
+    if ((memoryConfig?.backend ?? 'builtin') === 'qmd' && memoryConfig?.qmd) {
+      const qmd = await QmdMemoryManager.create({
+        workspaceId,
+        workspacePath,
+        qmdConfig: memoryConfig.qmd,
       });
-      memoryServices.set(id, memService);
-      // Initial index of memory files
+      if (qmd && builtinProvider) {
+        return { provider: new FallbackSearchProvider(qmd, builtinProvider), builtinService };
+      } else if (qmd) {
+        return { provider: qmd, builtinService: null };
+      }
+      console.warn(`[Scooby] QMD init failed for workspace ${workspaceId}, using builtin`);
+    }
+
+    return { provider: builtinProvider, builtinService };
+  }
+
+  for (const [id, ws] of workspaces) {
+    const { provider, builtinService } = await createMemoryProvider(
+      id, ws.path, config.models.embedding, config.memory,
+    );
+    if (provider) memoryProviders.set(id, provider);
+    if (builtinService) {
+      memoryServices.set(id, builtinService);
       const memoryDir = resolve(ws.path, 'memory');
-      const chunks = await memService.reindex(id, memoryDir);
+      const chunks = await builtinService.reindex(id, memoryDir);
       if (chunks > 0) {
         console.log(`[Scooby] Indexed ${chunks} memory chunks for workspace ${id}`);
       }
@@ -120,7 +169,128 @@ async function main() {
     sessionManagers.set(id, mgr);
   }
 
-  // 5b. Create usage trackers per workspace
+  // 5a. Conversation summarization on session archive
+  const summarizeSession = async (sessionId: string, workspaceId: string, mgr: SessionManager) => {
+    const memService = memoryServices.get(workspaceId);
+    if (!memService) return;
+
+    const transcript = await mgr.getTranscript(sessionId);
+    if (transcript.length < 2) return;
+
+    // Build plain-text conversation
+    const lines: string[] = [];
+    for (const entry of transcript) {
+      let text = '';
+      if (typeof entry.content === 'string') {
+        text = entry.content;
+      } else if (Array.isArray(entry.content)) {
+        text = entry.content
+          .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
+          .map((p) => p.text)
+          .join(' ');
+      }
+      if (text.trim()) {
+        lines.push(`${entry.role}: ${text.trim()}`);
+      }
+    }
+
+    const conversationText = lines.join('\n');
+    if (conversationText.length < 100) return;
+
+    try {
+      const candidates: FailoverCandidate[] = config.models.fast.candidates.map((c) => ({
+        model: getLanguageModel(c.provider, c.model),
+        candidate: c,
+      }));
+
+      const result = await generateWithFailover({
+        candidates,
+        system: 'You are a concise summarizer. Summarize the following conversation in 2-4 sentences, capturing the key topics discussed, decisions made, and any important context that would be useful to recall later. Focus on facts and outcomes, not pleasantries.',
+        messages: [{ role: 'user', content: conversationText }],
+        cooldowns,
+      });
+
+      const summary = typeof result.text === 'string' ? result.text : '';
+      if (summary.trim()) {
+        await memService.index(workspaceId, `conversation-summary:${sessionId}`, summary);
+        console.log(`[Scooby] Summarized session ${sessionId.slice(0, 8)}... for workspace ${workspaceId}`);
+      }
+    } catch (err) {
+      console.error(`[Scooby] Failed to summarize session ${sessionId.slice(0, 8)}...:`, err);
+    }
+  };
+
+  for (const [id, mgr] of sessionManagers) {
+    mgr.onArchive((sid, wid) => {
+      summarizeSession(sid, wid, mgr).catch((err) => {
+        console.error(`[Scooby] Summarization error:`, err);
+      });
+
+      // QMD session export
+      const provider = memoryProviders.get(wid);
+      if (provider?.exportSession && config.memory?.qmd?.sessions?.enabled) {
+        mgr.getTranscript(sid).then(transcript =>
+          provider.exportSession!(sid, transcript)
+        ).catch(err =>
+          console.error(`[Scooby] Session export error:`, err));
+      }
+    });
+  }
+
+  // 5b. Pre-compaction memory flush
+  const performMemoryFlush = async (
+    workspaceId: string,
+    sessionId: string,
+    sessionMgr: SessionManager,
+  ) => {
+    const ws = workspaces.get(workspaceId);
+    const memService = memoryServices.get(workspaceId);
+    if (!ws || !memService) return;
+
+    const flushToolCtx: ToolContext = {
+      workspace: { id: ws.id, path: ws.path },
+      session: { id: sessionId, workspaceId },
+      permissions: ws.permissions,
+      sendMessage,
+      memoryService: memService,
+      memoryProvider: memoryProviders.get(workspaceId),
+      citationsEnabled: resolveCitations(config.memory, memoryProviders.get(workspaceId)?.backendName ?? 'builtin'),
+    };
+
+    const transcript = await sessionMgr.getTranscript(sessionId);
+    const messages = await transcriptToMessages(transcript);
+
+    messages.push({
+      role: 'user',
+      content:
+        'Session transcript is getting long. Before context is lost, please save any important information, decisions, preferences, or context to memory using memory_write. Write to today\'s daily log (default) or MEMORY.md. If nothing important to save, do not call any tools.',
+    });
+
+    const flushRunner = new AgentRunner(toolRegistry, cooldowns, sessionMgr);
+    // Run silently — consume events without forwarding
+    for await (const _event of flushRunner.run({
+      messages,
+      workspaceId,
+      workspacePath: ws.path,
+      agent: ws.agent,
+      sessionId,
+      toolContext: flushToolCtx,
+      globalModels: {
+        fast: config.models.fast.candidates,
+        slow: config.models.slow.candidates,
+      },
+      usageTracker: usageTrackers.get(workspaceId),
+      agentName: ws.agent.name,
+      channelType: 'system',
+    })) {
+      // Consume silently
+    }
+
+    sessionMgr.markFlushed(sessionId);
+    console.log(`[Scooby] Memory flush completed for session ${sessionId.slice(0, 8)}...`);
+  };
+
+  // 5c. Create usage trackers per workspace
   const usageTrackers = new Map<string, UsageTracker>();
   for (const [id, ws] of workspaces) {
     usageTrackers.set(id, new UsageTracker(resolve(ws.path, 'data')));
@@ -142,6 +312,8 @@ async function main() {
   toolRegistry.register(ttsTool);
   toolRegistry.register(scratchpadReadTool);
   toolRegistry.register(scratchpadWriteTool);
+  toolRegistry.register(memoryGetTool);
+  toolRegistry.register(memoryWriteTool);
 
   // 6b. Create command processor, code manager, and workspace management
   const commandRegistry = createDefaultRegistry();
@@ -198,6 +370,12 @@ async function main() {
     });
     sessionManagers.set(ws.id, mgr);
     usageTrackers.set(ws.id, new UsageTracker(resolve(ws.path, 'data')));
+
+    mgr.onArchive((sid, wid) => {
+      summarizeSession(sid, wid, mgr).catch((err) => {
+        console.error(`[Scooby] Summarization error:`, err);
+      });
+    });
 
     return ws;
   };
@@ -351,6 +529,19 @@ async function main() {
       generateWorkspaceCode: () => {
         return codeManager.generate(workspaceId);
       },
+      searchMemory: memoryProviders.get(workspaceId) ? async (query: string) => {
+        const provider = memoryProviders.get(workspaceId)!;
+        const results = await provider.search(workspaceId, query);
+        return results.map((r) => ({ source: r.source, content: r.content, score: r.score }));
+      } : undefined,
+      addMemory: memoryProviders.get(workspaceId) ? async (text: string) => {
+        const provider = memoryProviders.get(workspaceId)!;
+        return provider.index(workspaceId, `user-note:${Date.now()}`, text);
+      } : undefined,
+      clearMemory: memoryProviders.get(workspaceId) ? async () => {
+        const provider = memoryProviders.get(workspaceId)!;
+        provider.deleteBySourcePrefix(workspaceId, 'user-note:');
+      } : undefined,
       createWorkspace: makeCreateWorkspace('webchat', connectionId),
       getAccessibleWorkspaces: async (): Promise<WorkspaceInfo[]> => {
         const accessibleIds = channelAccess.getAccessibleWorkspaces('webchat', connectionId);
@@ -384,6 +575,14 @@ async function main() {
       return { sessionId: session.id, command: true };
     }
 
+    // Pre-compaction memory flush
+    if (
+      (memoryServices.has(workspaceId) || memoryProviders.has(workspaceId)) &&
+      sessionMgr.shouldFlush(session.id, session.messageCount)
+    ) {
+      await performMemoryFlush(workspaceId, session.id, sessionMgr);
+    }
+
     // Record user message
     await sessionMgr.appendTranscript(session.id, {
       timestamp: new Date().toISOString(),
@@ -397,8 +596,9 @@ async function main() {
     const messages = await transcriptToMessages(transcript);
 
     // Get memory context
-    const memService = memoryServices.get(workspaceId);
-    const memoryContext = memService ? await memService.getContextForPrompt(workspaceId, text) : [];
+    const memProvider = memoryProviders.get(workspaceId);
+    const memoryContext = memProvider && text
+      ? await memProvider.getContextForPrompt(workspaceId, text) : [];
 
     const toolCtx: ToolContext = {
       workspace: { id: ws.id, path: ws.path },
@@ -409,6 +609,9 @@ async function main() {
         conversationId: connectionId,
       },
       sendMessage,
+      memoryService: memoryServices.get(workspaceId),
+      memoryProvider: memProvider,
+      citationsEnabled: resolveCitations(config.memory, memProvider?.backendName ?? 'builtin'),
     };
 
     // Stream response back via WebSocket
@@ -427,6 +630,8 @@ async function main() {
       usageTracker: usageTrackers.get(workspaceId),
       agentName: ws.agent.name,
       channelType: 'webchat',
+      citationsEnabled: resolveCitations(config.memory, memProvider?.backendName ?? 'builtin'),
+      memoryBackend: memProvider?.backendName,
     });
 
     // Process stream events and forward to WebSocket
@@ -589,6 +794,19 @@ async function main() {
       generateWorkspaceCode: () => {
         return codeManager.generate(workspaceId);
       },
+      searchMemory: memoryProviders.get(workspaceId) ? async (query: string) => {
+        const provider = memoryProviders.get(workspaceId)!;
+        const results = await provider.search(workspaceId, query);
+        return results.map((r) => ({ source: r.source, content: r.content, score: r.score }));
+      } : undefined,
+      addMemory: memoryProviders.get(workspaceId) ? async (text: string) => {
+        const provider = memoryProviders.get(workspaceId)!;
+        return provider.index(workspaceId, `user-note:${Date.now()}`, text);
+      } : undefined,
+      clearMemory: memoryProviders.get(workspaceId) ? async () => {
+        const provider = memoryProviders.get(workspaceId)!;
+        provider.deleteBySourcePrefix(workspaceId, 'user-note:');
+      } : undefined,
       createWorkspace: makeCreateWorkspace(msg.channelType, msg.conversationId),
       getAccessibleWorkspaces: async (): Promise<WorkspaceInfo[]> => {
         const accessibleIds = channelAccess.getAccessibleWorkspaces(msg.channelType, msg.conversationId);
@@ -636,6 +854,14 @@ async function main() {
 
     if (cmdResult?.handled) {
       return;
+    }
+
+    // Pre-compaction memory flush
+    if (
+      (memoryServices.has(workspaceId) || memoryProviders.has(workspaceId)) &&
+      sessionMgr.shouldFlush(session.id, session.messageCount)
+    ) {
+      await performMemoryFlush(workspaceId, session.id, sessionMgr);
     }
 
     // Process voice/audio attachments
@@ -712,9 +938,18 @@ async function main() {
     const transcript = await sessionMgr.getTranscript(session.id);
     const messages = await transcriptToMessages(transcript);
 
-    // Get memory context
-    const memService = memoryServices.get(workspaceId);
-    const memoryContext = memService && msg.text ? await memService.getContextForPrompt(workspaceId, msg.text) : [];
+    // Get memory context (with scope enforcement)
+    const memProviderForChannel = memoryProviders.get(workspaceId);
+    let memoryContext: string[];
+    if (memProviderForChannel && config.memory?.qmd?.scope?.dmOnly && msg.channelType !== 'webchat') {
+      // Scope enforcement: skip QMD search in group channels, use builtin fallback
+      const builtinService = memoryServices.get(workspaceId);
+      memoryContext = builtinService && msg.text
+        ? await builtinService.getContextForPrompt(workspaceId, msg.text) : [];
+    } else {
+      memoryContext = memProviderForChannel && msg.text
+        ? await memProviderForChannel.getContextForPrompt(workspaceId, msg.text) : [];
+    }
 
     const toolCtx: ToolContext = {
       workspace: { id: ws.id, path: ws.path },
@@ -725,6 +960,9 @@ async function main() {
         conversationId: msg.conversationId,
       },
       sendMessage,
+      memoryService: memoryServices.get(workspaceId),
+      memoryProvider: memProviderForChannel,
+      citationsEnabled: resolveCitations(config.memory, memProviderForChannel?.backendName ?? 'builtin'),
     };
 
     const agentRunner = new AgentRunner(toolRegistry, cooldowns, sessionMgr);
@@ -745,6 +983,8 @@ async function main() {
       usageTracker: usageTrackers.get(workspaceId),
       agentName: ws.agent.name,
       channelType: msg.channelType,
+      citationsEnabled: resolveCitations(config.memory, memProviderForChannel?.backendName ?? 'builtin'),
+      memoryBackend: memProviderForChannel?.backendName,
     })) {
       if (event.type === 'done') {
         fullResponse = event.response;
@@ -781,11 +1021,15 @@ async function main() {
     const sessionMgr = sessionManagers.get(job.workspace)!;
     const session = await sessionMgr.getOrCreate('cron', `cron:${job.id}`);
 
+    const cronMemProvider = memoryProviders.get(job.workspace);
     const toolCtx: ToolContext = {
       workspace: { id: ws.id, path: ws.path },
       session: { id: session.id, workspaceId: job.workspace },
       permissions: ws.permissions,
       sendMessage,
+      memoryService: memoryServices.get(job.workspace),
+      memoryProvider: cronMemProvider,
+      citationsEnabled: resolveCitations(config.memory, cronMemProvider?.backendName ?? 'builtin'),
     };
 
     const agentRunner = new AgentRunner(toolRegistry, cooldowns, sessionMgr);
@@ -803,6 +1047,8 @@ async function main() {
       usageTracker: usageTrackers.get(job.workspace),
       agentName: ws.agent.name,
       channelType: 'cron',
+      citationsEnabled: resolveCitations(config.memory, cronMemProvider?.backendName ?? 'builtin'),
+      memoryBackend: cronMemProvider?.backendName,
     })) {
       // Consume stream
     }
@@ -838,11 +1084,15 @@ async function main() {
     const sessionMgr = sessionManagers.get(workspaceId)!;
     const session = await sessionMgr.getOrCreate('webhook', `webhook:${Date.now()}`);
 
+    const webhookMemProvider = memoryProviders.get(workspaceId);
     const toolCtx: ToolContext = {
       workspace: { id: ws.id, path: ws.path },
       session: { id: session.id, workspaceId },
       permissions: ws.permissions,
       sendMessage,
+      memoryService: memoryServices.get(workspaceId),
+      memoryProvider: webhookMemProvider,
+      citationsEnabled: resolveCitations(config.memory, webhookMemProvider?.backendName ?? 'builtin'),
     };
 
     const agentRunner = new AgentRunner(toolRegistry, cooldowns, sessionMgr);
@@ -861,6 +1111,8 @@ async function main() {
       usageTracker: usageTrackers.get(workspaceId),
       agentName: ws.agent.name,
       channelType: 'webhook',
+      citationsEnabled: resolveCitations(config.memory, webhookMemProvider?.backendName ?? 'builtin'),
+      memoryBackend: webhookMemProvider?.backendName,
     })) {
       if (event.type === 'done') {
         response = event.response;
@@ -898,6 +1150,10 @@ async function main() {
     }
 
     await gateway.stop();
+
+    for (const provider of memoryProviders.values()) {
+      provider.close();
+    }
 
     for (const memService of memoryServices.values()) {
       memService.close();
