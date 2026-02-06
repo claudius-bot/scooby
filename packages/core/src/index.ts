@@ -76,3 +76,7 @@ export {
 export { scratchpadReadTool, scratchpadWriteTool } from './tools/impl/scratchpad.js';
 export { memoryGetTool } from './tools/impl/memory-get.js';
 export { memoryWriteTool } from './tools/impl/memory-write.js';
+export { fileListTool } from './tools/impl/file-list.js';
+export { fileDeleteTool } from './tools/impl/file-delete.js';
+export { fileMoveTool } from './tools/impl/file-move.js';
+export { fileSearchTool } from './tools/impl/file-search.js';
