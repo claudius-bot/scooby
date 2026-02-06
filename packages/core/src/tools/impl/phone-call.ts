@@ -8,6 +8,13 @@ import type { ScoobyToolDefinition } from '../types.js';
 const DEFAULT_TIMEOUT_MS = 30_000;
 const ELEVENLABS_BASE_URL = 'https://api.elevenlabs.io';
 
+// In-memory map: conversationId -> { workspaceId, sessionId, phoneNumber }
+export const activeCallRegistry = new Map<string, {
+  workspaceId: string;
+  sessionId: string;
+  phoneNumber: string;
+}>();
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -23,6 +30,7 @@ export interface PhoneCallOptions {
   agentId: string;
   agentPhoneNumberId: string;
   toNumber: string;
+  context?: string;
   firstMessage?: string;
   dynamicVariables?: Record<string, string>;
   timeoutMs?: number;
@@ -46,6 +54,7 @@ export async function initiatePhoneCall(options: PhoneCallOptions): Promise<Phon
     agentId,
     agentPhoneNumberId,
     toNumber,
+    context,
     firstMessage,
     dynamicVariables,
     timeoutMs = DEFAULT_TIMEOUT_MS,
@@ -64,17 +73,22 @@ export async function initiatePhoneCall(options: PhoneCallOptions): Promise<Phon
     to_number: toNumber,
   };
 
-  // Add optional conversation initiation data
-  if (firstMessage || dynamicVariables) {
-    const clientData: Record<string, unknown> = {};
-    if (firstMessage) {
-      clientData.conversation_config_override = {
-        agent: { first_message: firstMessage },
-      };
-    }
-    if (dynamicVariables) {
-      clientData.dynamic_variables = dynamicVariables;
-    }
+  // Build conversation initiation data with context, first message, and dynamic variables
+  const mergedVars: Record<string, string> = { ...dynamicVariables };
+  if (context) {
+    mergedVars.call_context = context;
+  }
+
+  const clientData: Record<string, unknown> = {};
+  if (firstMessage) {
+    clientData.conversation_config_override = {
+      agent: { first_message: firstMessage },
+    };
+  }
+  if (Object.keys(mergedVars).length > 0) {
+    clientData.dynamic_variables = mergedVars;
+  }
+  if (Object.keys(clientData).length > 0) {
     body.conversation_initiation_client_data = clientData;
   }
 
@@ -139,13 +153,33 @@ export function isPhoneCallConfigured(): boolean {
 export const phoneCallTool: ScoobyToolDefinition = {
   name: 'phone_call',
   description:
-    'Initiate an outbound phone call using an ElevenLabs Conversational AI voice agent. ' +
-    'The agent will call the specified phone number and conduct a conversation. ' +
-    'Requires ELEVENLABS_API_KEY, ELEVENLABS_AGENT_ID, and ELEVENLABS_PHONE_NUMBER_ID to be configured.',
+    'Initiate an outbound phone call using an autonomous ElevenLabs Conversational AI voice agent. ' +
+    'Once initiated, the voice agent independently handles the entire phone conversation — ' +
+    'you do NOT need to monitor, stay connected, or manage the call. ' +
+    'The voice agent will call the number, speak, listen, and respond on its own. ' +
+    'Use the "context" parameter to tell the voice agent the purpose of the call and any details it needs ' +
+    '(e.g. "Make a dinner reservation for 4 people at 7pm tonight under the name Zach"). ' +
+    'Use "firstMessage" to set the opening line the agent says when the call is answered. ' +
+    'Requires ELEVENLABS_API_KEY, ELEVENLABS_AGENT_ID, and ELEVENLABS_PHONE_NUMBER_ID.',
   inputSchema: z.object({
     phoneNumber: z
       .string()
       .describe('Phone number to call in E.164 format (e.g. +14155551234)'),
+    context: z
+      .string()
+      .optional()
+      .describe(
+        'The purpose and details of the call. This is passed to the voice agent so it knows what to do. ' +
+        'Be specific — include names, times, requests, and any information the agent needs to complete the task. ' +
+        'Example: "Call this restaurant and make a reservation for 4 people tonight at 7pm under the name Zach."'
+      ),
+    firstMessage: z
+      .string()
+      .optional()
+      .describe(
+        'The opening line the voice agent says when the call is answered. ' +
+        'Example: "Hi, I\'d like to make a reservation please."'
+      ),
     agentId: z
       .string()
       .optional()
@@ -154,16 +188,12 @@ export const phoneCallTool: ScoobyToolDefinition = {
       .string()
       .optional()
       .describe('ElevenLabs phone number ID. Defaults to ELEVENLABS_PHONE_NUMBER_ID env var.'),
-    firstMessage: z
-      .string()
-      .optional()
-      .describe('Custom first message the agent says when the call connects.'),
     dynamicVariables: z
       .record(z.string())
       .optional()
-      .describe('Dynamic variables to pass to the agent conversation (e.g. caller name, context).'),
+      .describe('Additional dynamic variables to pass to the voice agent conversation.'),
   }),
-  async execute(input, _ctx) {
+  async execute(input, ctx) {
     const agentId = input.agentId ?? process.env.ELEVENLABS_AGENT_ID;
     if (!agentId) {
       return 'Error: No agent ID provided. Set ELEVENLABS_AGENT_ID or pass agentId parameter.';
@@ -178,6 +208,7 @@ export const phoneCallTool: ScoobyToolDefinition = {
       agentId,
       agentPhoneNumberId: phoneNumberId,
       toNumber: input.phoneNumber,
+      context: input.context,
       firstMessage: input.firstMessage,
       dynamicVariables: input.dynamicVariables,
     });
@@ -186,7 +217,19 @@ export const phoneCallTool: ScoobyToolDefinition = {
       return `Error: ${result.error}`;
     }
 
-    const parts = [`Phone call initiated to ${input.phoneNumber}`];
+    if (result.conversationId) {
+      activeCallRegistry.set(result.conversationId, {
+        workspaceId: ctx.workspace.id,
+        sessionId: ctx.session.id,
+        phoneNumber: input.phoneNumber,
+      });
+    }
+
+    const parts = [
+      `Phone call initiated to ${input.phoneNumber}.`,
+      'The voice agent is now handling the call autonomously.',
+    ];
+    if (input.context) parts.push(`Call context: ${input.context}`);
     if (result.conversationId) parts.push(`Conversation ID: ${result.conversationId}`);
     if (result.callId) parts.push(`Call SID: ${result.callId}`);
     return parts.join('\n');

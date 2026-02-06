@@ -51,6 +51,8 @@ import {
   fileMoveTool,
   fileSearchTool,
   phoneCallTool,
+  phoneCallStatusTool,
+  activeCallRegistry,
   loadSkills,
 } from '@scooby/core';
 import {
@@ -329,6 +331,7 @@ async function main() {
   toolRegistry.register(fileMoveTool);
   toolRegistry.register(fileSearchTool);
   toolRegistry.register(phoneCallTool);
+  toolRegistry.register(phoneCallStatusTool);
 
   // 6b. Create command processor, code manager, and workspace management
   const commandRegistry = createDefaultRegistry();
@@ -487,6 +490,59 @@ async function main() {
         const ws = workspaces.get(workspaceId);
         if (!ws) return { totals: {}, byModel: {}, byDay: {}, byAgent: {} };
         return loadUsageSummary(resolve(ws.path, 'data'), { days });
+      },
+      handlePhoneCallWebhook: async (body: any) => {
+        const conversationId = body.conversation_id;
+        if (!conversationId) {
+          return { ok: false };
+        }
+
+        const callInfo = activeCallRegistry.get(conversationId);
+        if (!callInfo) {
+          console.warn(`[Scooby] Phone call webhook: unknown conversation ${conversationId}`);
+          return { ok: false };
+        }
+
+        const sessionMgr = sessionManagers.get(callInfo.workspaceId);
+        if (!sessionMgr) {
+          return { ok: false };
+        }
+
+        // Build summary from webhook payload
+        const status = body.status ?? 'unknown';
+        const duration = body.metadata?.call_duration_secs ?? body.call_duration_secs;
+        const transcript = body.transcript as Array<{ role: string; message: string }> | undefined;
+        const analysis = body.analysis as { summary?: string } | undefined;
+
+        const lines: string[] = [
+          '[Phone Call Result]',
+          `Call to ${callInfo.phoneNumber} completed.`,
+          `Status: ${status}`,
+        ];
+        if (duration != null) {
+          lines.push(`Duration: ${duration}s`);
+        }
+        if (analysis?.summary) {
+          lines.push(`Summary: ${analysis.summary}`);
+        }
+        if (transcript && transcript.length > 0) {
+          lines.push('Transcript:');
+          for (const turn of transcript) {
+            lines.push(`  ${turn.role}: ${turn.message}`);
+          }
+        }
+
+        await sessionMgr.appendTranscript(callInfo.sessionId, {
+          timestamp: new Date().toISOString(),
+          role: 'user',
+          content: lines.join('\n'),
+        });
+
+        // Clean up registry entry
+        activeCallRegistry.delete(conversationId);
+
+        console.log(`[Scooby] Phone call webhook: injected result for conversation ${conversationId}`);
+        return { ok: true };
       },
     },
   );

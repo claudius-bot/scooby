@@ -9,6 +9,7 @@ export interface ApiContext {
   getTranscript: (workspaceId: string, sessionId: string, limit?: number) => Promise<any[]>;
   handleWebhook: (workspaceId: string, body: any) => Promise<any>;
   getUsage: (workspaceId: string, days?: number) => Promise<any>;
+  handlePhoneCallWebhook?: (body: any) => Promise<{ ok: boolean }>;
 }
 
 export function createApi(ctx: ApiContext) {
@@ -54,6 +55,16 @@ export function createApi(ctx: ApiContext) {
     const limit = c.req.query('limit') ? Number(c.req.query('limit')) : undefined;
     const transcript = await ctx.getTranscript(c.req.param('id'), c.req.param('sessionId'), limit);
     return c.json({ transcript });
+  });
+
+  // POST /api/phone-call-webhook
+  app.post('/phone-call-webhook', async (c) => {
+    if (!ctx.handlePhoneCallWebhook) {
+      return c.json({ error: 'Phone call webhooks not configured' }, 404);
+    }
+    const body = await c.req.json();
+    const result = await ctx.handlePhoneCallWebhook(body);
+    return c.json(result);
   });
 
   // POST /api/webhook/:workspaceId
