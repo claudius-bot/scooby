@@ -9,10 +9,14 @@ export interface SessionMetadata {
   status: 'active' | 'idle' | 'archived';
 }
 
+export type TranscriptContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image'; path: string; mediaType?: string };
+
 export interface TranscriptEntry {
   timestamp: string;
   role: 'user' | 'assistant' | 'system' | 'tool';
-  content: string;
+  content: string | TranscriptContentPart[];
   metadata?: {
     toolName?: string;
     toolCallId?: string;
