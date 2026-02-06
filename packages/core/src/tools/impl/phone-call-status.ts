@@ -17,7 +17,11 @@ export interface ConversationDetails {
   conversationId?: string;
   status?: 'initiated' | 'in-progress' | 'processing' | 'done' | 'failed';
   transcript?: Array<{ role: string; message: string }>;
-  analysis?: { summary?: string; data_collection?: Record<string, unknown> };
+  analysis?: {
+    transcript_summary?: string;
+    call_successful?: string;
+    data_collection_results?: Record<string, unknown>;
+  };
   duration?: number;
   error?: string;
 }
@@ -109,15 +113,19 @@ export const phoneCallStatusTool: ScoobyToolDefinition = {
       }
     }
 
-    if (result.analysis?.summary) {
-      parts.push('');
-      parts.push(`Summary: ${result.analysis.summary}`);
+    if (result.analysis?.call_successful) {
+      parts.push(`Outcome: ${result.analysis.call_successful}`);
     }
 
-    if (result.analysis?.data_collection && Object.keys(result.analysis.data_collection).length > 0) {
+    if (result.analysis?.transcript_summary) {
+      parts.push('');
+      parts.push(`Summary: ${result.analysis.transcript_summary}`);
+    }
+
+    if (result.analysis?.data_collection_results && Object.keys(result.analysis.data_collection_results).length > 0) {
       parts.push('');
       parts.push('Collected Data:');
-      for (const [key, value] of Object.entries(result.analysis.data_collection)) {
+      for (const [key, value] of Object.entries(result.analysis.data_collection_results)) {
         parts.push(`  ${key}: ${JSON.stringify(value)}`);
       }
     }

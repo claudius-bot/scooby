@@ -118,7 +118,11 @@ export function createChatCompletionsApi(ctx: ChatCompletionsContext) {
     const sessionMgr = ctx.getSessionManager(workspaceId);
     const session = await sessionMgr.getOrCreate('api', sessionKey);
 
-    // 5. Record user message in transcript
+    // 5. Extract system message from incoming request (e.g. ElevenLabs sends
+    // its agent prompt with substituted dynamic variables as a system message)
+    const incomingSystemMessage = messages.find((m) => m.role === 'system');
+
+    // 6. Record user message in transcript
     const lastUserMessage = messages.filter((m) => m.role === 'user').pop();
     if (lastUserMessage) {
       await sessionMgr.appendTranscript(session.id, {
@@ -128,9 +132,20 @@ export function createChatCompletionsApi(ctx: ChatCompletionsContext) {
       });
     }
 
-    // 6. Get transcript and build full message list
+    // 7. Get transcript and build full message list
     const transcript = await sessionMgr.getTranscript(session.id);
     const fullMessages = await transcriptToMessages(transcript);
+
+    // If the caller provided a system message, prepend it so the agent sees
+    // the caller's instructions (e.g. ElevenLabs voice agent prompt with
+    // call context). This is injected as a user message with a clear label
+    // so it doesn't conflict with the agent's own system prompt.
+    if (incomingSystemMessage?.content) {
+      fullMessages.unshift({
+        role: 'user',
+        content: `[System Instructions from Voice Platform]\n${incomingSystemMessage.content}`,
+      });
+    }
 
     // Get memory context
     const memProvider = ctx.getMemoryProvider(workspaceId);

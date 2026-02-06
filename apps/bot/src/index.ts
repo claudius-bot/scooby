@@ -492,7 +492,17 @@ async function main() {
         return loadUsageSummary(resolve(ws.path, 'data'), { days });
       },
       handlePhoneCallWebhook: async (body: any) => {
-        const conversationId = body.conversation_id;
+        // ElevenLabs wraps post-call webhooks in { type, data, event_timestamp }.
+        // Unwrap the envelope to get the conversation data.
+        const eventType = body.type;
+        const payload = body.data ?? body;
+
+        if (eventType === 'call_initiation_failure') {
+          console.warn(`[Scooby] Phone call webhook: call initiation failed`, payload);
+          return { ok: true };
+        }
+
+        const conversationId = payload.conversation_id;
         if (!conversationId) {
           return { ok: false };
         }
@@ -509,10 +519,10 @@ async function main() {
         }
 
         // Build summary from webhook payload
-        const status = body.status ?? 'unknown';
-        const duration = body.metadata?.call_duration_secs ?? body.call_duration_secs;
-        const transcript = body.transcript as Array<{ role: string; message: string }> | undefined;
-        const analysis = body.analysis as { summary?: string } | undefined;
+        const status = payload.status ?? 'unknown';
+        const duration = payload.metadata?.call_duration_secs;
+        const transcript = payload.transcript as Array<{ role: string; message: string }> | undefined;
+        const analysis = payload.analysis as { transcript_summary?: string; call_successful?: string } | undefined;
 
         const lines: string[] = [
           '[Phone Call Result]',
@@ -522,8 +532,11 @@ async function main() {
         if (duration != null) {
           lines.push(`Duration: ${duration}s`);
         }
-        if (analysis?.summary) {
-          lines.push(`Summary: ${analysis.summary}`);
+        if (analysis?.call_successful) {
+          lines.push(`Outcome: ${analysis.call_successful}`);
+        }
+        if (analysis?.transcript_summary) {
+          lines.push(`Summary: ${analysis.transcript_summary}`);
         }
         if (transcript && transcript.length > 0) {
           lines.push('Transcript:');
