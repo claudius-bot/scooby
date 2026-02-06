@@ -46,6 +46,10 @@ import {
   scratchpadWriteTool,
   memoryGetTool,
   memoryWriteTool,
+  fileListTool,
+  fileDeleteTool,
+  fileMoveTool,
+  fileSearchTool,
   loadSkills,
 } from '@scooby/core';
 import {
@@ -314,6 +318,10 @@ async function main() {
   toolRegistry.register(scratchpadWriteTool);
   toolRegistry.register(memoryGetTool);
   toolRegistry.register(memoryWriteTool);
+  toolRegistry.register(fileListTool);
+  toolRegistry.register(fileDeleteTool);
+  toolRegistry.register(fileMoveTool);
+  toolRegistry.register(fileSearchTool);
 
   // 6b. Create command processor, code manager, and workspace management
   const commandRegistry = createDefaultRegistry();
