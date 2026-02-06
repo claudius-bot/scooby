@@ -107,6 +107,46 @@ export const AiGatewayConfigSchema = z.object({
 
 export type AiGatewayConfig = z.infer<typeof AiGatewayConfigSchema>;
 
+// ── QMD config ──────────────────────────────────────────────────────
+export const QmdConfigSchema = z.object({
+  command: z.string().default('qmd'),
+  includeDefaultMemory: z.boolean().default(true),
+  paths: z.array(z.object({
+    path: z.string(),
+    name: z.string().optional(),
+    pattern: z.string().optional(),
+  })).default([]),
+  sessions: z.object({
+    enabled: z.boolean().default(false),
+    retentionDays: z.number().optional(),
+  }).default({}),
+  update: z.object({
+    debounceMs: z.number().default(15000),
+    embedIntervalMs: z.number().default(3600000),
+    onBoot: z.boolean().default(true),
+  }).default({}),
+  limits: z.object({
+    maxResults: z.number().default(6),
+    maxSnippetChars: z.number().default(700),
+    maxInjectedChars: z.number().default(4000),
+    timeoutMs: z.number().default(4000),
+  }).default({}),
+  scope: z.object({
+    dmOnly: z.boolean().default(true),
+  }).default({}),
+});
+
+export type QmdConfig = z.infer<typeof QmdConfigSchema>;
+
+// ── Memory config ───────────────────────────────────────────────────
+export const MemoryConfigSchema = z.object({
+  backend: z.enum(['builtin', 'qmd']).default('builtin'),
+  citations: z.enum(['auto', 'on', 'off']).default('auto'),
+  qmd: QmdConfigSchema.optional(),
+});
+
+export type MemoryConfig = z.infer<typeof MemoryConfigSchema>;
+
 // ── Root config ──────────────────────────────────────────────────────
 export const ScoobyConfigSchema = z.object({
   models: ModelsConfigSchema,
@@ -117,6 +157,7 @@ export const ScoobyConfigSchema = z.object({
   session: SessionConfigSchema.optional(),
   cron: z.array(CronEntrySchema).optional(),
   heartbeat: HeartbeatSettingsSchema.optional(),
+  memory: MemoryConfigSchema.optional(),
 });
 
 export type ScoobyConfig = z.infer<typeof ScoobyConfigSchema>;

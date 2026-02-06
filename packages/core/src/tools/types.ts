@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import type { PermissionContext } from './permissions.js';
+import type { MemoryService } from '../memory/service.js';
+import type { MemorySearchProvider } from '../memory/search-provider.js';
 
 export interface OutboundAttachment {
   type: 'photo' | 'document' | 'audio' | 'video';
@@ -27,6 +29,9 @@ export interface ToolContext {
     conversationId: string;
   };
   sendMessage: (channelType: string, msg: OutboundMessage) => Promise<void>;
+  memoryService?: MemoryService;
+  memoryProvider?: MemorySearchProvider;
+  citationsEnabled?: boolean;
 }
 
 export interface ScoobyToolDefinition<TInput extends z.ZodType = z.ZodType> {

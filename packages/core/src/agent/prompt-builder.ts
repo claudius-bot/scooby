@@ -7,6 +7,8 @@ export interface PromptContext {
   timestamp: Date;
   workspaceId: string;
   workspacePath: string;
+  citationsEnabled?: boolean;
+  memoryBackend?: string;
 }
 
 export interface SkillDefinition {
@@ -79,6 +81,33 @@ Be friendly and welcoming during this process.`;
   if (ctx.memoryContext.length > 0) {
     parts.push(`# Relevant Memory\n\n${ctx.memoryContext.join('\n\n---\n\n')}`);
   }
+
+  // 6b. Memory system guidance
+  let memoryGuidance = `# Memory System
+
+You have persistent memory tools:
+- **memory_search**: Search indexed memory for relevant information
+- **memory_get**: Read specific memory files
+- **memory_write**: Write to memory files (auto re-indexed)
+
+Memory organization:
+- **Daily logs** (\`memory/YYYY-MM-DD.md\`): Append-only. Write observations, decisions, and preferences here. \`memory_write\` defaults to today's log.
+- **Long-term memory** (\`MEMORY.md\`): Curated important facts. Consolidate from daily logs periodically.
+
+Write important context to memory when:
+- The user shares preferences, facts, or decisions worth remembering
+- A session is getting long and you want to preserve key context
+- The user explicitly asks you to remember something`;
+
+  if (ctx.memoryBackend?.startsWith('qmd')) {
+    memoryGuidance += '\n\nThis workspace uses QMD for extended memory search. You can read QMD-indexed files using `memory_get` with paths like `qmd/<collection>/<file>`.';
+  }
+
+  if (ctx.citationsEnabled) {
+    memoryGuidance += '\n\n**Citations**: When referencing memory search results, include the source citation from the "Source:" line.';
+  }
+
+  parts.push(memoryGuidance);
 
   // 7. Scratchpad
   if (ctx.agent.scratchpad) {

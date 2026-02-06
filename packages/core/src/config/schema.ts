@@ -24,6 +24,10 @@ export {
   type HeartbeatSettings,
   AiGatewayConfigSchema,
   type AiGatewayConfig,
+  QmdConfigSchema,
+  type QmdConfig,
+  MemoryConfigSchema,
+  type MemoryConfig,
   ScoobyConfigSchema,
   type ScoobyConfig,
 } from "@scooby/schemas";

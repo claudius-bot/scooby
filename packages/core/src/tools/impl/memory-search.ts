@@ -8,9 +8,31 @@ export const memorySearchTool: ScoobyToolDefinition = {
     query: z.string().describe('Search query'),
     limit: z.number().optional().default(6).describe('Maximum number of results'),
   }),
-  async execute(input, _ctx) {
-    // Memory search is wired up during application bootstrap
-    // The actual implementation delegates to MemoryService
-    return 'Memory search not yet initialized';
+  async execute(input, ctx) {
+    // Prefer the new provider interface
+    const provider = ctx.memoryProvider;
+    if (provider) {
+      const results = await provider.search(ctx.workspace.id, input.query, input.limit);
+      if (results.length === 0) return 'No relevant memory found.';
+      return results.map(r => {
+        let text = `[${r.source}] (score: ${r.score.toFixed(2)})\n${r.content}`;
+        if (ctx.citationsEnabled && r.citation) {
+          const loc = r.citation.startLine ? `#${r.citation.startLine}` : '';
+          text += `\nSource: ${r.citation.path}${loc}`;
+        }
+        return text;
+      }).join('\n\n---\n\n');
+    }
+
+    // Fallback to legacy memoryService
+    if (ctx.memoryService) {
+      const results = await ctx.memoryService.search(ctx.workspace.id, input.query, input.limit);
+      if (results.length === 0) return 'No relevant memory found.';
+      return results
+        .map(r => `[${r.chunk.source}] (score: ${r.score.toFixed(2)})\n${r.chunk.content}`)
+        .join('\n\n---\n\n');
+    }
+
+    return 'Memory search is not available in this workspace.';
   },
 };

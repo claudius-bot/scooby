@@ -23,6 +23,9 @@ export * from './memory/chunker.js';
 export * from './memory/embeddings.js';
 export * from './memory/store.js';
 export * from './memory/service.js';
+export * from './memory/search-provider.js';
+export { QmdMemoryManager } from './memory/qmd-manager.js';
+export { sessionToMarkdown } from './memory/session-export.js';
 export * from './automation/scheduler.js';
 export * from './automation/heartbeat.js';
 export * from './automation/webhooks.js';
@@ -71,3 +74,5 @@ export {
   type TtsProvider,
 } from './tools/impl/tts.js';
 export { scratchpadReadTool, scratchpadWriteTool } from './tools/impl/scratchpad.js';
+export { memoryGetTool } from './tools/impl/memory-get.js';
+export { memoryWriteTool } from './tools/impl/memory-write.js';

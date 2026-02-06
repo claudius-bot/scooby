@@ -16,6 +16,7 @@ export class SessionManager {
   private metaStore: JsonStore<Record<SessionKey, SessionMetadata>>;
   private transcriptStores = new Map<string, JsonlStore<TranscriptEntry>>();
   private archiveCallbacks: Array<(sessionId: string, workspaceId: string) => void> = [];
+  private flushedSessions = new Set<string>();
 
   constructor(private config: SessionManagerConfig) {
     this.metaStore = new JsonStore(join(config.sessionsDir, 'sessions.json'));
@@ -139,6 +140,7 @@ export class SessionManager {
         this.notifyArchive(id);
         await this.compactTranscript(id);
         this.transcriptStores.delete(id);
+        this.flushedSessions.delete(id);
       }
     }
 
@@ -160,6 +162,16 @@ export class SessionManager {
     this.notifyArchive(sessionId);
     await this.compactTranscript(sessionId);
     this.transcriptStores.delete(sessionId);
+    this.flushedSessions.delete(sessionId);
+  }
+
+  shouldFlush(sessionId: string, messageCount: number): boolean {
+    if (this.flushedSessions.has(sessionId)) return false;
+    return messageCount >= this.config.maxTranscriptLines * 0.80;
+  }
+
+  markFlushed(sessionId: string): void {
+    this.flushedSessions.add(sessionId);
   }
 
   private getTranscriptStore(sessionId: string): JsonlStore<TranscriptEntry> {
