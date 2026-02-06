@@ -39,9 +39,11 @@ export interface OutboundMessage {
 
 export type MessageHandler = (msg: InboundMessage) => Promise<void>;
 
+export type OutputFormat = 'markdown' | 'telegram' | 'plaintext';
+
 export interface ChannelAdapter {
   type: string;
-  supportsMarkdown: boolean;
+  outputFormat: OutputFormat;
   start(): Promise<void>;
   stop(): Promise<void>;
   send(message: OutboundMessage): Promise<void>;

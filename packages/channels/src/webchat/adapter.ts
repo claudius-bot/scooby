@@ -9,7 +9,7 @@ export interface WebChatConnection {
 
 export class WebChatAdapter implements ChannelAdapter {
   type = 'webchat' as const;
-  supportsMarkdown = true;
+  outputFormat = 'markdown' as const;
   private handlers: MessageHandler[] = [];
   private connections = new Map<string, WebChatConnection>();
 

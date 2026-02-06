@@ -244,7 +244,7 @@ async function main() {
   const sendMessage = async (channelType: string, msg: OutboundMessage) => {
     for (const adapter of channelAdapters) {
       if (adapter.type === channelType) {
-        const prepared = prepareOutboundText(msg.text, msg.format, adapter.supportsMarkdown);
+        const prepared = prepareOutboundText(msg.text, msg.format, adapter.outputFormat);
         await adapter.send({ ...msg, text: prepared.text, format: prepared.format });
         return;
       }
@@ -565,7 +565,7 @@ async function main() {
       },
       sendReply: async (replyText: string, format?: 'text' | 'markdown') => {
         if (adapter) {
-          const prepared = prepareOutboundText(replyText, format ?? 'markdown', adapter.supportsMarkdown);
+          const prepared = prepareOutboundText(replyText, format ?? 'markdown', adapter.outputFormat);
           await adapter.send({
             conversationId: msg.conversationId,
             text: prepared.text,
@@ -620,7 +620,7 @@ async function main() {
           const targetWs = workspaces.get(targetWorkspaceId);
           if (adapter && targetWs) {
             const switchText = `Switched to ${targetWs.agent.emoji} **${targetWs.agent.name}**.`;
-            const prepared = prepareOutboundText(switchText, 'markdown', adapter.supportsMarkdown);
+            const prepared = prepareOutboundText(switchText, 'markdown', adapter.outputFormat);
             await adapter.send({
               conversationId: msg.conversationId,
               text: prepared.text,
@@ -745,7 +745,7 @@ async function main() {
     if (fullResponse) {
       const adapter = channelAdapters.find((a) => a.type === msg.channelType);
       if (adapter) {
-        const prepared = prepareOutboundText(fullResponse, 'markdown', adapter.supportsMarkdown);
+        const prepared = prepareOutboundText(fullResponse, 'markdown', adapter.outputFormat);
         await adapter.send({
           conversationId: msg.conversationId,
           text: prepared.text,
