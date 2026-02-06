@@ -73,23 +73,18 @@ export async function initiatePhoneCall(options: PhoneCallOptions): Promise<Phon
     to_number: toNumber,
   };
 
-  // Build conversation initiation data with context, first message, and dynamic variables
-  const mergedVars: Record<string, string> = { ...dynamicVariables };
+  // Pass context and dynamic variables via dynamic_variables (NOT config overrides,
+  // which require agent Security settings to be enabled and can cause immediate hangup).
+  // The ElevenLabs agent's prompt should reference {{call_context}} to use the context.
+  const vars: Record<string, string> = { ...dynamicVariables };
   if (context) {
-    mergedVars.call_context = context;
+    vars.call_context = context;
   }
-
-  const clientData: Record<string, unknown> = {};
   if (firstMessage) {
-    clientData.conversation_config_override = {
-      agent: { first_message: firstMessage },
-    };
+    vars.first_message = firstMessage;
   }
-  if (Object.keys(mergedVars).length > 0) {
-    clientData.dynamic_variables = mergedVars;
-  }
-  if (Object.keys(clientData).length > 0) {
-    body.conversation_initiation_client_data = clientData;
+  if (Object.keys(vars).length > 0) {
+    body.conversation_initiation_client_data = { dynamic_variables: vars };
   }
 
   try {
@@ -157,9 +152,7 @@ export const phoneCallTool: ScoobyToolDefinition = {
     'Once initiated, the voice agent independently handles the entire phone conversation — ' +
     'you do NOT need to monitor, stay connected, or manage the call. ' +
     'The voice agent will call the number, speak, listen, and respond on its own. ' +
-    'Use the "context" parameter to tell the voice agent the purpose of the call and any details it needs ' +
-    '(e.g. "Make a dinner reservation for 4 people at 7pm tonight under the name Zach"). ' +
-    'Use "firstMessage" to set the opening line the agent says when the call is answered. ' +
+    'Use the "context" parameter to tell the voice agent the purpose of the call and any details it needs. ' +
     'Requires ELEVENLABS_API_KEY, ELEVENLABS_AGENT_ID, and ELEVENLABS_PHONE_NUMBER_ID.',
   inputSchema: z.object({
     phoneNumber: z
@@ -169,15 +162,14 @@ export const phoneCallTool: ScoobyToolDefinition = {
       .string()
       .optional()
       .describe(
-        'The purpose and details of the call. This is passed to the voice agent so it knows what to do. ' +
-        'Be specific — include names, times, requests, and any information the agent needs to complete the task. ' +
-        'Example: "Call this restaurant and make a reservation for 4 people tonight at 7pm under the name Zach."'
+        'The purpose and details of the call, passed to the voice agent as a dynamic variable. ' +
+        'Be specific — include names, times, requests, and any information the agent needs.'
       ),
     firstMessage: z
       .string()
       .optional()
       .describe(
-        'The opening line the voice agent says when the call is answered. ' +
+        'The opening line the voice agent says when the call is answered, passed as a dynamic variable. ' +
         'Example: "Hi, I\'d like to make a reservation please."'
       ),
     agentId: z
@@ -188,10 +180,6 @@ export const phoneCallTool: ScoobyToolDefinition = {
       .string()
       .optional()
       .describe('ElevenLabs phone number ID. Defaults to ELEVENLABS_PHONE_NUMBER_ID env var.'),
-    dynamicVariables: z
-      .record(z.string())
-      .optional()
-      .describe('Additional dynamic variables to pass to the voice agent conversation.'),
   }),
   async execute(input, ctx) {
     const agentId = input.agentId ?? process.env.ELEVENLABS_AGENT_ID;
@@ -210,7 +198,6 @@ export const phoneCallTool: ScoobyToolDefinition = {
       toNumber: input.phoneNumber,
       context: input.context,
       firstMessage: input.firstMessage,
-      dynamicVariables: input.dynamicVariables,
     });
 
     if (!result.success) {
@@ -229,7 +216,6 @@ export const phoneCallTool: ScoobyToolDefinition = {
       `Phone call initiated to ${input.phoneNumber}.`,
       'The voice agent is now handling the call autonomously.',
     ];
-    if (input.context) parts.push(`Call context: ${input.context}`);
     if (result.conversationId) parts.push(`Conversation ID: ${result.conversationId}`);
     if (result.callId) parts.push(`Call SID: ${result.callId}`);
     return parts.join('\n');
