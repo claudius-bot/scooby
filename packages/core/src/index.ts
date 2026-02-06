@@ -80,3 +80,10 @@ export { fileListTool } from './tools/impl/file-list.js';
 export { fileDeleteTool } from './tools/impl/file-delete.js';
 export { fileMoveTool } from './tools/impl/file-move.js';
 export { fileSearchTool } from './tools/impl/file-search.js';
+export {
+  phoneCallTool,
+  initiatePhoneCall,
+  isPhoneCallConfigured,
+  type PhoneCallResult,
+  type PhoneCallOptions,
+} from './tools/impl/phone-call.js';

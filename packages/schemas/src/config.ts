@@ -157,6 +157,17 @@ export const MemoryConfigSchema = z.object({
 
 export type MemoryConfig = z.infer<typeof MemoryConfigSchema>;
 
+// ── Skills config ───────────────────────────────────────────────────
+export const SkillsConfigSchema = z.object({
+  globalDir: z.string().optional(),
+  entries: z.record(z.object({
+    apiKey: z.string().optional(),
+    env: z.record(z.string()).optional(),
+  })).optional(),
+}).optional();
+
+export type SkillsConfig = z.infer<typeof SkillsConfigSchema>;
+
 // ── Root config ──────────────────────────────────────────────────────
 export const ScoobyConfigSchema = z.object({
   models: ModelsConfigSchema,
@@ -168,6 +179,7 @@ export const ScoobyConfigSchema = z.object({
   cron: z.array(CronEntrySchema).optional(),
   heartbeat: HeartbeatSettingsSchema.optional(),
   memory: MemoryConfigSchema.optional(),
+  skills: SkillsConfigSchema,
 });
 
 export type ScoobyConfig = z.infer<typeof ScoobyConfigSchema>;

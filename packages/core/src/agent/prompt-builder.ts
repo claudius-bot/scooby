@@ -17,6 +17,7 @@ export interface SkillDefinition {
   instructions: string;
   always?: boolean;
   modelGroup?: 'fast' | 'slow';
+  metadata?: Record<string, unknown>;
 }
 
 export function buildSystemPrompt(ctx: PromptContext): string {

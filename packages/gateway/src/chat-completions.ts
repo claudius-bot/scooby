@@ -21,6 +21,8 @@ export interface ChatCompletionsContext {
   getGlobalModels: () => { fast: import('@scooby/core').ModelCandidate[]; slow: import('@scooby/core').ModelCandidate[] };
   getUsageTracker: (workspaceId: string) => import('@scooby/core').UsageTracker | undefined;
   resolveCitations: (workspaceId: string) => boolean;
+  globalSkillsDir?: string;
+  skillEntries?: Record<string, { apiKey?: string; env?: Record<string, string> }>;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
@@ -102,7 +104,8 @@ export function createChatCompletionsApi(ctx: ChatCompletionsContext) {
     }
 
     // 4. Resolve session
-    const headerSessionKey = c.req.header('x-scooby-session-key');
+    const headerSessionKey = c.req.header('x-scooby-session-key')
+      ?? c.req.header('x-openclaw-session-key');
     let sessionKey: string;
     if (headerSessionKey) {
       sessionKey = headerSessionKey;
@@ -157,6 +160,8 @@ export function createChatCompletionsApi(ctx: ChatCompletionsContext) {
       channelType: 'api',
       citationsEnabled: ctx.resolveCitations(workspaceId),
       memoryBackend: memProvider?.backendName,
+      globalSkillsDir: ctx.globalSkillsDir,
+      skillEntries: ctx.skillEntries,
     };
 
     const completionId = `chatcmpl-${randomUUID()}`;
