@@ -2,7 +2,6 @@ import { resolve, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { copyFile, mkdir, unlink } from 'node:fs/promises';
 import { config as loadEnv } from 'dotenv';
-import type { ModelMessage } from 'ai';
 import {
   loadConfig,
   loadWorkspace,
@@ -21,6 +20,8 @@ import {
   WebhookManager,
   UsageTracker,
   loadUsageSummary,
+  transcriptToMessages,
+  type TranscriptContentPart,
   shellExecTool,
   fileReadTool,
   fileWriteTool,
@@ -393,10 +394,7 @@ async function main() {
     // Run agent
     const agentRunner = new AgentRunner(toolRegistry, cooldowns, sessionMgr);
     const transcript = await sessionMgr.getTranscript(session.id);
-    const messages = transcript.map((t) => ({
-      role: t.role,
-      content: t.content,
-    })) as ModelMessage[];
+    const messages = await transcriptToMessages(transcript);
 
     // Get memory context
     const memService = memoryServices.get(workspaceId);
@@ -662,29 +660,44 @@ async function main() {
       }
     }
 
-    // Process photo attachments
+    // Process photo attachments — build multi-part content for vision
+    let transcriptContent: string | TranscriptContentPart[] = messageContent;
     const photoAttachments = (msg.attachments ?? []).filter(
       (a) => a.type === 'photo'
     );
 
-    for (const attachment of photoAttachments) {
-      if (!attachment.localPath) continue;
-      try {
-        const imagesDir = resolve(ws.path, 'data', 'images');
-        await mkdir(imagesDir, { recursive: true });
-        const fileName = basename(attachment.localPath);
-        const destPath = resolve(imagesDir, fileName);
-        await copyFile(attachment.localPath, destPath);
-        // Clean up temp file
-        await unlink(attachment.localPath).catch(() => {});
-        const caption = msg.text.trim();
-        if (caption) {
-          messageContent = `[The user sent an image with the following caption/instruction: "${caption}"]\n\nThe image has been saved to data/images/${fileName}. Use the image_gen tool with this image as an input (using localPath "data/images/${fileName}") and the caption as the prompt to generate a modified image based on their request. Send the resulting image back to the user.`;
-        } else {
-          messageContent += `\n[The user sent an image saved to data/images/${fileName}. If they're asking for image modifications, use the image_gen tool with inputImages containing localPath "data/images/${fileName}" to process it.]`;
+    if (photoAttachments.length > 0) {
+      const contentParts: TranscriptContentPart[] = [];
+      const imageParts: TranscriptContentPart[] = [];
+
+      for (const attachment of photoAttachments) {
+        if (!attachment.localPath) continue;
+        try {
+          const imagesDir = resolve(ws.path, 'data', 'images');
+          await mkdir(imagesDir, { recursive: true });
+          const fileName = basename(attachment.localPath);
+          const destPath = resolve(imagesDir, fileName);
+          await copyFile(attachment.localPath, destPath);
+          // Clean up temp file
+          await unlink(attachment.localPath).catch(() => {});
+          imageParts.push({
+            type: 'image',
+            path: destPath,
+            mediaType: attachment.mimeType,
+          });
+          // Add file path note so tools (image_gen) can reference the file
+          messageContent += `\n[Image saved to data/images/${fileName}. For image_gen tool use localPath "data/images/${fileName}".]`;
+        } catch (err) {
+          console.error(`[Scooby] Failed to process photo attachment:`, err);
         }
-      } catch (err) {
-        console.error(`[Scooby] Failed to process photo attachment:`, err);
+      }
+
+      if (imageParts.length > 0) {
+        // Text part: caption/text + file path notes
+        const caption = messageContent.trim() || 'The user sent an image.';
+        contentParts.push({ type: 'text', text: caption });
+        contentParts.push(...imageParts);
+        transcriptContent = contentParts;
       }
     }
 
@@ -692,15 +705,12 @@ async function main() {
     await sessionMgr.appendTranscript(session.id, {
       timestamp: new Date().toISOString(),
       role: 'user',
-      content: messageContent,
+      content: transcriptContent,
     });
 
     // Get transcript for context
     const transcript = await sessionMgr.getTranscript(session.id);
-    const messages = transcript.map((t) => ({
-      role: t.role,
-      content: t.content,
-    })) as ModelMessage[];
+    const messages = await transcriptToMessages(transcript);
 
     // Get memory context
     const memService = memoryServices.get(workspaceId);

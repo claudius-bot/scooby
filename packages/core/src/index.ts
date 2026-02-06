@@ -11,6 +11,7 @@ export * from './ai/escalation.js';
 export * from './storage/json-store.js';
 export * from './storage/jsonl-store.js';
 export * from './session/types.js';
+export * from './session/transcript.js';
 export * from './session/manager.js';
 export * from './tools/types.js';
 export * from './tools/registry.js';
