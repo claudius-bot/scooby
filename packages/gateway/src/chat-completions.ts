@@ -1,6 +1,19 @@
 import { Hono } from 'hono';
 import { randomUUID } from 'node:crypto';
-import { transcriptToMessages, type AgentRunner, type AgentRunOptions } from '@scooby/core';
+import { tool as aiTool } from 'ai';
+import { z } from 'zod';
+import {
+  transcriptToMessages,
+  getLanguageModel,
+  streamWithFailover,
+  generateWithFailover,
+  CooldownTracker,
+  activeCallRegistry,
+  type AgentRunner,
+  type AgentRunOptions,
+  type ModelCandidate,
+  type FailoverCandidate,
+} from '@scooby/core';
 
 // ── Context interface ───────────────────────────────────────────────
 
@@ -23,6 +36,12 @@ export interface ChatCompletionsContext {
   resolveCitations: (workspaceId: string) => boolean;
   globalSkillsDir?: string;
   skillEntries?: Record<string, { apiKey?: string; env?: Record<string, string> }>;
+  askChannelUser?: (params: {
+    channelType: string;
+    conversationId: string;
+    question: string;
+    timeoutMs?: number;
+  }) => Promise<string>;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
@@ -40,6 +59,111 @@ function parseWorkspaceFromModel(model: string): string | null {
   // "scooby:<id>" or "agent:<id>"
   const match = model.match(/^(?:scooby|agent):(.+)$/);
   return match ? match[1] : null;
+}
+
+// ── Daphne – dedicated voice agent for phone calls ──────────────────
+
+const DAPHNE_SYSTEM_PROMPT = `You are Daphne, a personal assistant making a phone call on behalf of your employer.
+
+WHO YOU ARE:
+- You are a personal assistant. Your employer (the user) has asked you to make this phone call for them.
+- You are calling a BUSINESS or THIRD PARTY (a restaurant, doctor's office, salon, service provider, etc.).
+- The person who answers the phone works at that business. They are NOT your employer.
+- Think of yourself like a human secretary or executive assistant picking up the phone to handle a task for your boss.
+
+HOW TO BEHAVE:
+- Speak naturally and conversationally, like a real person making a phone call.
+- You already know what you need — the task details are provided below. Do NOT ask the person on the phone what you want. YOU are the one making the request.
+- For example, if your task is "Make a dinner reservation for 4 at 7pm at Luigi's", you call and say something like "Hi, I'd like to make a reservation for 4 tonight at 7pm please" — you do NOT ask "What restaurant would you like?" because you already know.
+- Keep responses concise. This is a voice call, not a text chat.
+- Do NOT reveal that you are an AI unless directly asked.
+- If the business asks for a name, use the name provided in your task context, or say "let me check" and use the ask_user tool.
+
+ASKING YOUR EMPLOYER:
+- You have an "ask_user" tool that sends a text message to your employer and waits for their reply.
+- Use it ONLY when a decision arises that you cannot make on your own (e.g. the requested time is unavailable and you need to confirm an alternative).
+- While waiting, politely tell the person on the phone to hold for a moment (e.g. "Let me just check on that, one moment please.").
+- Once you receive the reply, continue the conversation naturally.
+- Only use ask_user when truly necessary — prefer making reasonable decisions yourself.
+
+YOUR TASK:`;
+
+const daphneCooldowns = new CooldownTracker();
+
+/**
+ * Detect whether an incoming request is from ElevenLabs voice agent
+ * (identified by the presence of a system message with call instructions).
+ */
+function isVoiceCallRequest(messages: OpenAIMessage[]): boolean {
+  return messages.some((m) => m.role === 'system');
+}
+
+/**
+ * Build Daphne's system prompt by combining her base personality with
+ * the ElevenLabs system message (which contains the substituted call_context).
+ */
+function buildDaphneSystemPrompt(elevenLabsSystemContent: string): string {
+  return `${DAPHNE_SYSTEM_PROMPT}\n${elevenLabsSystemContent}`;
+}
+
+/**
+ * Convert OpenAI-format messages to AI SDK format, filtering out the
+ * system message (which is handled separately as the system prompt).
+ */
+function toAiSdkMessages(messages: OpenAIMessage[]): Array<{ role: 'user' | 'assistant'; content: string }> {
+  return messages
+    .filter((m) => m.role !== 'system')
+    .map((m) => ({
+      role: m.role as 'user' | 'assistant',
+      content: m.content,
+    }));
+}
+
+/**
+ * Find the most recent active call from the registry.
+ * Used to determine which channel to send clarification requests to.
+ */
+function findActiveCall() {
+  let lastEntry: { workspaceId: string; sessionId: string; phoneNumber: string; channelType?: string; channelConversationId?: string } | undefined;
+  for (const [, entry] of activeCallRegistry) {
+    lastEntry = entry;
+  }
+  return lastEntry;
+}
+
+/**
+ * Create the ask_user AI SDK tool for Daphne. Sends a message to the user's
+ * original chat channel and waits for their reply (up to 2 minutes).
+ */
+function createAskUserTool(askChannelUser?: ChatCompletionsContext['askChannelUser']) {
+  const schema = z.object({
+    question: z.string().describe('The question to ask your user (be specific and concise)'),
+  });
+  return aiTool({
+    description:
+      'Send a text message to your user via their chat channel and wait for their reply. ' +
+      'Use this when you need a decision from your user during the call (e.g. confirming an alternative time). ' +
+      'The user has up to 2 minutes to respond.',
+    inputSchema: schema,
+    execute: async (input: z.infer<typeof schema>) => {
+      const { question } = input;
+      const activeCall = findActiveCall();
+      if (!activeCall?.channelType || !activeCall?.channelConversationId || !askChannelUser) {
+        return 'Unable to reach the user right now. Please use your best judgment to proceed.';
+      }
+      try {
+        const reply = await askChannelUser({
+          channelType: activeCall.channelType,
+          conversationId: activeCall.channelConversationId,
+          question: `**Daphne (on the phone):** ${question}`,
+          timeoutMs: 120_000,
+        });
+        return reply;
+      } catch {
+        return 'The user did not respond in time. Please use your best judgment to proceed.';
+      }
+    },
+  });
 }
 
 // ── Factory ─────────────────────────────────────────────────────────
@@ -81,6 +205,41 @@ export function createChatCompletionsApi(ctx: ChatCompletionsContext) {
       );
     }
 
+    const completionId = `chatcmpl-${randomUUID()}`;
+    const created = Math.floor(Date.now() / 1000);
+
+    // ── Voice call path (Daphne) ──────────────────────────────────
+    // When ElevenLabs sends a system message, it means this is a voice
+    // call routed through the custom LLM integration. Use Daphne — a
+    // dedicated, lightweight voice agent — instead of the full bot.
+    if (isVoiceCallRequest(messages)) {
+      const systemMsg = messages.find((m) => m.role === 'system');
+      const daphneSystem = buildDaphneSystemPrompt(systemMsg?.content ?? '');
+      const conversationMessages = toAiSdkMessages(messages);
+      const globalModels = ctx.getGlobalModels();
+      const modelName = 'daphne';
+
+      // Prefer fast models for low-latency voice responses
+      const candidates: FailoverCandidate[] = globalModels.fast.map((c) => ({
+        model: getLanguageModel(c.provider, c.model),
+        candidate: c,
+      }));
+
+      if (candidates.length === 0) {
+        return c.json(openaiError('No models configured', 'server_error', 'no_models'), 500);
+      }
+
+      const daphneTools = { ask_user: createAskUserTool(ctx.askChannelUser) };
+
+      if (stream) {
+        return daphneStreamResponse(c, candidates, daphneSystem, conversationMessages, daphneTools, completionId, created, modelName);
+      } else {
+        return daphneNonStreamResponse(c, candidates, daphneSystem, conversationMessages, daphneTools, completionId, created, modelName);
+      }
+    }
+
+    // ── Standard API path (full Scooby agent) ─────────────────────
+
     // 3. Resolve workspace
     const headerWorkspaceId = c.req.header('x-scooby-workspace-id');
     let workspaceId: string | null = headerWorkspaceId ?? null;
@@ -118,11 +277,7 @@ export function createChatCompletionsApi(ctx: ChatCompletionsContext) {
     const sessionMgr = ctx.getSessionManager(workspaceId);
     const session = await sessionMgr.getOrCreate('api', sessionKey);
 
-    // 5. Extract system message from incoming request (e.g. ElevenLabs sends
-    // its agent prompt with substituted dynamic variables as a system message)
-    const incomingSystemMessage = messages.find((m) => m.role === 'system');
-
-    // 6. Record user message in transcript
+    // 5. Record user message in transcript
     const lastUserMessage = messages.filter((m) => m.role === 'user').pop();
     if (lastUserMessage) {
       await sessionMgr.appendTranscript(session.id, {
@@ -132,20 +287,9 @@ export function createChatCompletionsApi(ctx: ChatCompletionsContext) {
       });
     }
 
-    // 7. Get transcript and build full message list
+    // 6. Get transcript and build full message list
     const transcript = await sessionMgr.getTranscript(session.id);
     const fullMessages = await transcriptToMessages(transcript);
-
-    // If the caller provided a system message, prepend it so the agent sees
-    // the caller's instructions (e.g. ElevenLabs voice agent prompt with
-    // call context). This is injected as a user message with a clear label
-    // so it doesn't conflict with the agent's own system prompt.
-    if (incomingSystemMessage?.content) {
-      fullMessages.unshift({
-        role: 'user',
-        content: `[System Instructions from Voice Platform]\n${incomingSystemMessage.content}`,
-      });
-    }
 
     // Get memory context
     const memProvider = ctx.getMemoryProvider(workspaceId);
@@ -179,8 +323,6 @@ export function createChatCompletionsApi(ctx: ChatCompletionsContext) {
       skillEntries: ctx.skillEntries,
     };
 
-    const completionId = `chatcmpl-${randomUUID()}`;
-    const created = Math.floor(Date.now() / 1000);
     const modelName = `scooby:${workspaceId}`;
 
     if (stream) {
@@ -307,6 +449,142 @@ function streamResponse(
   });
 
   return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    },
+  });
+}
+
+// ── Daphne Non-streaming ─────────────────────────────────────────────
+
+async function daphneNonStreamResponse(
+  c: any,
+  candidates: FailoverCandidate[],
+  system: string,
+  messages: Array<{ role: 'user' | 'assistant'; content: string }>,
+  tools: Record<string, any>,
+  id: string,
+  created: number,
+  model: string,
+) {
+  try {
+    const result = await generateWithFailover({
+      candidates,
+      messages,
+      system,
+      tools,
+      stopWhenStepCount: 3,
+      cooldowns: daphneCooldowns,
+    });
+
+    const text = result.text ?? '';
+    const usage = result.usage;
+
+    return c.json({
+      id,
+      object: 'chat.completion',
+      created,
+      model,
+      choices: [
+        {
+          index: 0,
+          message: { role: 'assistant', content: text },
+          finish_reason: 'stop',
+        },
+      ],
+      usage: {
+        prompt_tokens: usage?.inputTokens ?? 0,
+        completion_tokens: usage?.outputTokens ?? 0,
+        total_tokens: (usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0),
+      },
+    });
+  } catch (err: any) {
+    return c.json(
+      openaiError(err.message ?? 'Internal error', 'server_error', 'model_error'),
+      500,
+    );
+  }
+}
+
+// ── Daphne Streaming ─────────────────────────────────────────────────
+
+function daphneStreamResponse(
+  c: any,
+  candidates: FailoverCandidate[],
+  system: string,
+  messages: Array<{ role: 'user' | 'assistant'; content: string }>,
+  tools: Record<string, any>,
+  id: string,
+  created: number,
+  model: string,
+) {
+  const readable = new ReadableStream({
+    async start(controller) {
+      const encoder = new TextEncoder();
+
+      function send(data: string) {
+        controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+      }
+
+      // First chunk: role
+      send(JSON.stringify({
+        id,
+        object: 'chat.completion.chunk',
+        created,
+        model,
+        choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }],
+      }));
+
+      try {
+        const result = await streamWithFailover({
+          candidates,
+          messages,
+          system,
+          tools,
+          stopWhenStepCount: 3,
+          cooldowns: daphneCooldowns,
+        });
+
+        for await (const part of result.fullStream) {
+          if (part.type === 'text-delta') {
+            send(JSON.stringify({
+              id,
+              object: 'chat.completion.chunk',
+              created,
+              model,
+              choices: [{ index: 0, delta: { content: part.text }, finish_reason: null }],
+            }));
+          }
+          // tool-call and tool-result events are handled internally by the
+          // AI SDK multi-step loop — only forward text deltas to ElevenLabs.
+        }
+
+        // Final chunk
+        send(JSON.stringify({
+          id,
+          object: 'chat.completion.chunk',
+          created,
+          model,
+          choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+        }));
+      } catch (err) {
+        send(JSON.stringify({
+          id,
+          object: 'chat.completion.chunk',
+          created,
+          model,
+          choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+        }));
+      }
+
+      send('[DONE]');
+      controller.close();
+    },
+  });
+
+  return new Response(readable, {
     headers: {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',

@@ -190,12 +190,18 @@ importers:
       '@scooby/schemas':
         specifier: workspace:*
         version: link:../schemas
+      ai:
+        specifier: ^6.0.69
+        version: 6.0.69(zod@3.25.76)
       hono:
         specifier: ^4.11.7
         version: 4.11.7
       ws:
         specifier: ^8.18.0
         version: 8.19.0
+      zod:
+        specifier: ^3.24.0
+        version: 3.25.76
     devDependencies:
       '@types/ws':
         specifier: ^8.5.13

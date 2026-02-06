@@ -8,11 +8,13 @@ import type { ScoobyToolDefinition } from '../types.js';
 const DEFAULT_TIMEOUT_MS = 30_000;
 const ELEVENLABS_BASE_URL = 'https://api.elevenlabs.io';
 
-// In-memory map: conversationId -> { workspaceId, sessionId, phoneNumber }
+// In-memory map: conversationId -> call metadata (including originating channel info)
 export const activeCallRegistry = new Map<string, {
   workspaceId: string;
   sessionId: string;
   phoneNumber: string;
+  channelType?: string;
+  channelConversationId?: string;
 }>();
 
 // ============================================================================
@@ -148,11 +150,12 @@ export function isPhoneCallConfigured(): boolean {
 export const phoneCallTool: ScoobyToolDefinition = {
   name: 'phone_call',
   description:
-    'Initiate an outbound phone call using an autonomous ElevenLabs Conversational AI voice agent. ' +
-    'Once initiated, the voice agent independently handles the entire phone conversation — ' +
-    'you do NOT need to monitor, stay connected, or manage the call. ' +
-    'The voice agent will call the number, speak, listen, and respond on its own. ' +
-    'Use the "context" parameter to tell the voice agent the purpose of the call and any details it needs. ' +
+    'Initiate an outbound phone call using a voice agent named Daphne. ' +
+    'Daphne acts as the user\'s personal assistant — she will call the number, speak to whoever answers, ' +
+    'and handle the conversation autonomously on the user\'s behalf. ' +
+    'You do NOT need to monitor or manage the call after initiating it. ' +
+    'IMPORTANT: The "context" parameter is Daphne\'s only briefing — it must contain ALL details she needs ' +
+    'to complete the task without asking the call recipient for information she should already know. ' +
     'Requires ELEVENLABS_API_KEY, ELEVENLABS_AGENT_ID, and ELEVENLABS_PHONE_NUMBER_ID.',
   inputSchema: z.object({
     phoneNumber: z
@@ -160,17 +163,19 @@ export const phoneCallTool: ScoobyToolDefinition = {
       .describe('Phone number to call in E.164 format (e.g. +14155551234)'),
     context: z
       .string()
-      .optional()
       .describe(
-        'The purpose and details of the call, passed to the voice agent as a dynamic variable. ' +
-        'Be specific — include names, times, requests, and any information the agent needs.'
+        'A complete briefing for the voice agent. This is the ONLY information she has, so be thorough. ' +
+        'MUST include: (1) WHO she is calling (business name, e.g. "Luigi\'s Italian Restaurant"), ' +
+        '(2) WHAT she needs to do (e.g. "make a dinner reservation"), ' +
+        '(3) ALL relevant details (party size, date/time, name for the reservation, special requests, etc.). ' +
+        'Example: "Call Luigi\'s Italian Restaurant to make a dinner reservation for 4 people under the name Zach, tonight at 7:00 PM. No dietary restrictions."'
       ),
     firstMessage: z
       .string()
       .optional()
       .describe(
-        'The opening line the voice agent says when the call is answered, passed as a dynamic variable. ' +
-        'Example: "Hi, I\'d like to make a reservation please."'
+        'The opening line the voice agent says when the call is answered. Should be a natural greeting ' +
+        'that immediately states the purpose. Example: "Hi, I\'d like to make a dinner reservation for tonight please."'
       ),
     agentId: z
       .string()
@@ -182,6 +187,13 @@ export const phoneCallTool: ScoobyToolDefinition = {
       .describe('ElevenLabs phone number ID. Defaults to ELEVENLABS_PHONE_NUMBER_ID env var.'),
   }),
   async execute(input, ctx) {
+    // Prevent duplicate calls — if there's already an active call to this number, bail out
+    for (const [, call] of activeCallRegistry) {
+      if (call.phoneNumber === input.phoneNumber) {
+        return `There is already an active phone call to ${input.phoneNumber}. Wait for it to complete before calling again. Use phone_call_status to check on the call.`;
+      }
+    }
+
     const agentId = input.agentId ?? process.env.ELEVENLABS_AGENT_ID;
     if (!agentId) {
       return 'Error: No agent ID provided. Set ELEVENLABS_AGENT_ID or pass agentId parameter.';
@@ -209,6 +221,8 @@ export const phoneCallTool: ScoobyToolDefinition = {
         workspaceId: ctx.workspace.id,
         sessionId: ctx.session.id,
         phoneNumber: input.phoneNumber,
+        channelType: ctx.conversation?.channelType,
+        channelConversationId: ctx.conversation?.conversationId,
       });
     }
 

@@ -448,6 +448,45 @@ async function main() {
     }
   };
 
+  // 9b. Pending clarification system for Daphne voice agent
+  // When Daphne (on a phone call) needs user input, she sends a message to the
+  // user's channel and waits for a reply. This map tracks those pending requests.
+  const pendingClarifications = new Map<string, {
+    resolve: (response: string) => void;
+    timeout: ReturnType<typeof setTimeout>;
+  }>();
+
+  function clarificationKey(channelType: string, conversationId: string) {
+    return `${channelType}:${conversationId}`;
+  }
+
+  const askChannelUser = async (params: {
+    channelType: string;
+    conversationId: string;
+    question: string;
+    timeoutMs?: number;
+  }): Promise<string> => {
+    const { channelType, conversationId, question, timeoutMs = 120_000 } = params;
+
+    // Send the question to the channel
+    await sendMessage(channelType, {
+      conversationId,
+      text: question,
+      format: 'markdown',
+    });
+
+    // Wait for response
+    const key = clarificationKey(channelType, conversationId);
+    return new Promise<string>((resolve) => {
+      const timeout = setTimeout(() => {
+        pendingClarifications.delete(key);
+        resolve('No response received within the timeout period. Please proceed with your best judgment.');
+      }, timeoutMs);
+
+      pendingClarifications.set(key, { resolve, timeout });
+    });
+  };
+
   // 10. Gateway server
   const gatewayConfig = config.gateway ?? { host: '0.0.0.0', port: 3000 };
   const gateway = new GatewayServer(
@@ -599,6 +638,7 @@ async function main() {
       },
       globalSkillsDir: skillsConfig?.globalDir,
       skillEntries: skillsConfig?.entries,
+      askChannelUser,
     });
     gateway.getApp().route('/', chatApi);
     console.log('[Scooby] Chat Completions endpoint enabled at /v1/chat/completions');
@@ -824,6 +864,16 @@ async function main() {
   // 11. Message handler for channel adapters
   const messageQueue = new MessageQueue({ debounceMs: 500 });
   messageQueue.onFlush(async (msg: InboundMessage) => {
+    // Check if this message is a reply to a pending Daphne clarification
+    const cKey = clarificationKey(msg.channelType, msg.conversationId);
+    const pending = pendingClarifications.get(cKey);
+    if (pending) {
+      clearTimeout(pending.timeout);
+      pendingClarifications.delete(cKey);
+      pending.resolve(msg.text);
+      return;
+    }
+
     const adapter = channelAdapters.find((a) => a.type === msg.channelType);
 
     // Check if this channel has an explicit binding

@@ -16,8 +16,10 @@
     "@hono/node-server": "^1.19.9",
     "@scooby/core": "workspace:*",
     "@scooby/schemas": "workspace:*",
+    "ai": "^6.0.69",
     "hono": "^4.11.7",
-    "ws": "^8.18.0"
+    "ws": "^8.18.0",
+    "zod": "^3.24.0"
   },
   "devDependencies": {
     "@types/ws": "^8.5.13",
