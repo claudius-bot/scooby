@@ -41,6 +41,7 @@ export type MessageHandler = (msg: InboundMessage) => Promise<void>;
 
 export interface ChannelAdapter {
   type: string;
+  supportsMarkdown: boolean;
   start(): Promise<void>;
   stop(): Promise<void>;
   send(message: OutboundMessage): Promise<void>;

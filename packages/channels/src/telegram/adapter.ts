@@ -11,6 +11,7 @@ export interface TelegramAdapterConfig {
 
 export class TelegramAdapter implements ChannelAdapter {
   type = 'telegram' as const;
+  supportsMarkdown = true;
   private bot: Bot;
   private handlers: MessageHandler[] = [];
 

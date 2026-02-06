@@ -41,6 +41,7 @@ import {
   TelegramAdapter,
   WebChatAdapter,
   MessageQueue,
+  prepareOutboundText,
   type InboundMessage,
   type ChannelAdapter,
 } from '@scooby/channels';
@@ -243,7 +244,8 @@ async function main() {
   const sendMessage = async (channelType: string, msg: OutboundMessage) => {
     for (const adapter of channelAdapters) {
       if (adapter.type === channelType) {
-        await adapter.send(msg);
+        const prepared = prepareOutboundText(msg.text, msg.format, adapter.supportsMarkdown);
+        await adapter.send({ ...msg, text: prepared.text, format: prepared.format });
         return;
       }
     }
@@ -563,10 +565,11 @@ async function main() {
       },
       sendReply: async (replyText: string, format?: 'text' | 'markdown') => {
         if (adapter) {
+          const prepared = prepareOutboundText(replyText, format ?? 'markdown', adapter.supportsMarkdown);
           await adapter.send({
             conversationId: msg.conversationId,
-            text: replyText,
-            format: format ?? 'markdown',
+            text: prepared.text,
+            format: prepared.format,
           });
         }
       },
@@ -616,10 +619,12 @@ async function main() {
           await channelAccess.grantAccess(msg.channelType, msg.conversationId, targetWorkspaceId);
           const targetWs = workspaces.get(targetWorkspaceId);
           if (adapter && targetWs) {
+            const switchText = `Switched to ${targetWs.agent.emoji} **${targetWs.agent.name}**.`;
+            const prepared = prepareOutboundText(switchText, 'markdown', adapter.supportsMarkdown);
             await adapter.send({
               conversationId: msg.conversationId,
-              text: `Switched to ${targetWs.agent.emoji} **${targetWs.agent.name}**.`,
-              format: 'markdown',
+              text: prepared.text,
+              format: prepared.format,
             });
           }
           return true;
@@ -740,10 +745,11 @@ async function main() {
     if (fullResponse) {
       const adapter = channelAdapters.find((a) => a.type === msg.channelType);
       if (adapter) {
+        const prepared = prepareOutboundText(fullResponse, 'markdown', adapter.supportsMarkdown);
         await adapter.send({
           conversationId: msg.conversationId,
-          text: fullResponse,
-          format: 'markdown',
+          text: prepared.text,
+          format: prepared.format,
         });
       }
     }
