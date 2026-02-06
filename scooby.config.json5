@@ -56,4 +56,8 @@
   heartbeat: {
     intervalMinutes: 5,
   },
+
+  memory: {
+    backend: 'qmd',
+  },
 }
