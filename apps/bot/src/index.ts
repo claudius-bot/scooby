@@ -1200,7 +1200,7 @@ async function main() {
 
     scheduler.onJob(async (job, workspaceId) => {
       const wsForJob = workspaces.get(workspaceId);
-      if (!wsForJob) return '';
+      if (!wsForJob) return { response: '', sessionId: '' };
 
       const sessionMgr = sessionManagers.get(workspaceId)!;
       const session = await sessionMgr.getOrCreate('cron', `cron:${job.id}`);
@@ -1251,19 +1251,19 @@ async function main() {
       }
 
       console.log(`[Cron] Job "${job.id}" completed for workspace ${workspaceId}`);
-      return response;
+      return { response, sessionId: session.id };
     });
 
-    // Schedule config-defined jobs
+    // Buffer config-defined jobs for merge at start()
     const wsConfig = config.workspaces.find((w) => w.id === id);
     if (wsConfig?.cron) {
       for (const entry of wsConfig.cron) {
-        await scheduler.schedule(entry);
+        scheduler.schedule(entry);
       }
     }
 
-    // Load persisted agent-created jobs
-    await scheduler.loadPersistedJobs();
+    // Load persisted jobs, merge with config, recover missed, arm timer
+    await scheduler.start();
 
     cronSchedulers.set(id, scheduler);
   }

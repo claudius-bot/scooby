@@ -14,6 +14,8 @@ export {
   type DeliveryTarget,
   CronScheduleSchema,
   type CronSchedule,
+  CronJobStateSchema,
+  type CronJobState,
   WorkspaceCronEntrySchema,
   type WorkspaceCronEntry,
   CronRunRecordSchema,

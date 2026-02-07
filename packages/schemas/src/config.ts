@@ -52,7 +52,7 @@ export type DeliveryTarget = z.infer<typeof DeliveryTargetSchema>;
 
 // ── Cron schedule (discriminated union) ──────────────────────────────
 export const CronScheduleSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('every'), interval: z.string() }),
+  z.object({ kind: z.literal('every'), interval: z.string(), anchorMs: z.number().optional() }),
   z.object({ kind: z.literal('daily'), time: z.string() }),
   z.object({ kind: z.literal('cron'), expression: z.string() }),
   z.object({ kind: z.literal('at'), at: z.string() }),
@@ -61,6 +61,14 @@ export const CronScheduleSchema = z.discriminatedUnion('kind', [
 export type CronSchedule = z.infer<typeof CronScheduleSchema>;
 
 // ── Per-workspace cron entry ─────────────────────────────────────────
+export const CronJobStateSchema = z.object({
+  nextRunAtMs: z.number().optional(),
+  runningAtMs: z.number().optional(),
+  lastStatus: z.enum(['success', 'error', 'skipped']).optional(),
+});
+
+export type CronJobState = z.infer<typeof CronJobStateSchema>;
+
 export const WorkspaceCronEntrySchema = z.object({
   id: z.string(),
   name: z.string().optional(),
@@ -70,6 +78,7 @@ export const WorkspaceCronEntrySchema = z.object({
   delivery: DeliveryTargetSchema.optional(),
   source: z.enum(['config', 'agent']).default('config'),
   createdAt: z.string().optional(),
+  state: CronJobStateSchema.default({}),
 });
 
 export type WorkspaceCronEntry = z.infer<typeof WorkspaceCronEntrySchema>;
@@ -83,6 +92,8 @@ export const CronRunRecordSchema = z.object({
   response: z.string().optional(),
   error: z.string().optional(),
   delivered: z.boolean().default(false),
+  sessionId: z.string().optional(),
+  durationMs: z.number().optional(),
 });
 
 export type CronRunRecord = z.infer<typeof CronRunRecordSchema>;

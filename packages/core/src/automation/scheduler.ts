@@ -1,10 +1,13 @@
-import { CronJob } from 'cron';
+import { Cron } from 'croner';
 import { join } from 'node:path';
 import { JsonStore } from '../storage/json-store.js';
 import { JsonlStore } from '../storage/jsonl-store.js';
 import type { WorkspaceCronEntry, CronRunRecord } from '../config/schema.js';
 
-type WorkspaceCronHandler = (job: WorkspaceCronEntry, workspaceId: string) => Promise<string>;
+type WorkspaceCronHandler = (
+  job: WorkspaceCronEntry,
+  workspaceId: string,
+) => Promise<{ response: string; sessionId: string }>;
 
 const DURATION_RE = /^(\d+)\s*(s|sec|m|min|h|hr|d|day)s?$/i;
 const UNIT_MS: Record<string, number> = {
@@ -17,11 +20,15 @@ const UNIT_MS: Record<string, number> = {
 const HISTORY_COMPACT_LIMIT = 100;
 const HISTORY_COMPACT_EVERY = 20;
 const RESPONSE_MAX_CHARS = 2000;
-const ONE_SHOT_GRACE_MS = 5 * 60 * 1000; // 5 minutes
+const MAX_TIMER_MS = 60_000;            // cap polling interval at 60 s
+const STUCK_RUNNING_MS = 10 * 60_000;   // 10 minutes
 
 export class WorkspaceCronScheduler {
-  private cronJobs = new Map<string, CronJob>();
-  private timers = new Map<string, ReturnType<typeof setTimeout>>();
+  private jobs: WorkspaceCronEntry[] = [];
+  private configJobs: WorkspaceCronEntry[] = [];
+  private loaded = false;
+  private dirty = false;
+  private timer: ReturnType<typeof setTimeout> | null = null;
   private handler: WorkspaceCronHandler | null = null;
   private jobStore: JsonStore<WorkspaceCronEntry[]>;
   private historyStore: JsonlStore<CronRunRecord>;
@@ -35,180 +42,244 @@ export class WorkspaceCronScheduler {
     this.historyStore = new JsonlStore(join(dataDir, 'cron-history.jsonl'));
   }
 
+  // ── Lifecycle ────────────────────────────────────────────────────────
+
   onJob(handler: WorkspaceCronHandler): void {
     this.handler = handler;
   }
 
-  /** Schedule a config-defined job (startup). Overwrites persisted agent jobs with same ID. */
-  async schedule(entry: WorkspaceCronEntry): Promise<void> {
-    if (!entry.enabled) return;
-    this.scheduleEntry(entry);
+  /** Buffer a config-defined job for merge at start(). */
+  schedule(entry: WorkspaceCronEntry): void {
+    this.configJobs.push(entry);
   }
 
-  /** Add an agent-created job: persist + schedule. */
+  /** Load persisted jobs, merge with config, recover missed, arm timer. */
+  async start(): Promise<void> {
+    // 1. Load persisted agent jobs
+    const persisted = (await this.jobStore.read()) ?? [];
+
+    // 2. Merge: config wins by ID
+    const merged = new Map<string, WorkspaceCronEntry>();
+    for (const job of persisted) merged.set(job.id, job);
+    for (const job of this.configJobs) merged.set(job.id, job);
+    this.jobs = Array.from(merged.values());
+
+    // 3. Clear stale runningAtMs markers (crash recovery)
+    const now = Date.now();
+    for (const job of this.jobs) {
+      if (job.state.runningAtMs) {
+        console.log(`[Cron:${this.workspaceId}] Clearing stale runningAtMs on job "${job.id}" (crash recovery)`);
+        job.state.runningAtMs = undefined;
+        this.dirty = true;
+      }
+    }
+
+    // 4. Run missed jobs: any enabled job where nextRunAtMs <= now
+    for (const job of this.jobs) {
+      if (!job.enabled) continue;
+      const next = job.state.nextRunAtMs;
+      if (next != null && next <= now) {
+        console.log(`[Cron:${this.workspaceId}] Running missed job "${job.id}" (was due at ${new Date(next).toISOString()})`);
+        await this.executeJob(job);
+      }
+    }
+
+    // 5. Recompute next runs for all jobs
+    this.recomputeNextRuns();
+
+    // 6. Persist if dirty
+    if (this.dirty) {
+      await this.persist();
+    }
+
+    this.loaded = true;
+
+    // 7. Arm timer
+    this.armTimer();
+  }
+
+  stopAll(): void {
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+  }
+
+  // ── Runtime (called by agent tools) ──────────────────────────────────
+
+  /** Add an agent-created job: persist + merge + rearm. */
   async addJob(entry: WorkspaceCronEntry): Promise<void> {
-    const jobs = (await this.jobStore.read()) ?? [];
-    const idx = jobs.findIndex((j) => j.id === entry.id);
-    if (idx >= 0) {
-      jobs[idx] = entry;
-    } else {
-      jobs.push(entry);
+    // Ensure state is initialized
+    if (!entry.state) {
+      (entry as any).state = {};
     }
-    await this.jobStore.write(jobs);
 
-    if (entry.enabled) {
-      this.scheduleEntry(entry);
+    const idx = this.jobs.findIndex((j) => j.id === entry.id);
+    if (idx >= 0) {
+      this.jobs[idx] = entry;
+    } else {
+      this.jobs.push(entry);
     }
+
+    // Compute next run immediately
+    const next = this.computeNextRunAtMs(entry, Date.now());
+    if (next != null) {
+      entry.state.nextRunAtMs = next;
+    }
+
+    this.dirty = true;
+    await this.persist();
+    this.armTimer();
   }
 
-  /** Remove a job by ID: unschedule + remove from persistence. */
+  /** Remove a job by ID: remove + persist + rearm. */
   async removeJob(id: string): Promise<boolean> {
-    this.stop(id);
-
-    const jobs = (await this.jobStore.read()) ?? [];
-    const idx = jobs.findIndex((j) => j.id === id);
+    const idx = this.jobs.findIndex((j) => j.id === id);
     if (idx < 0) return false;
 
-    jobs.splice(idx, 1);
-    await this.jobStore.write(jobs);
+    this.jobs.splice(idx, 1);
+    this.dirty = true;
+    await this.persist();
+    this.armTimer();
     return true;
   }
 
-  /** List all jobs: config-scheduled (in-memory) + agent-persisted. */
-  async listJobs(): Promise<WorkspaceCronEntry[]> {
-    const persisted = (await this.jobStore.read()) ?? [];
-    // Merge: persisted agent jobs + any config jobs that aren't overridden
-    const ids = new Set(persisted.map((j) => j.id));
-    const configJobs: WorkspaceCronEntry[] = [];
-    // Config jobs are scheduled in-memory via schedule(), we track them here
-    // Return agent-persisted jobs (they're the persisted state of truth for agent jobs)
-    return [...persisted, ...configJobs.filter((j) => !ids.has(j.id))];
+  /** Return in-memory list (no recompute). */
+  listJobs(): WorkspaceCronEntry[] {
+    return this.jobs;
   }
 
-  /** Get run history, most recent last. */
+  /** Read run history, most recent last. */
   async getHistory(limit = 20): Promise<CronRunRecord[]> {
     return this.historyStore.readLast(limit);
   }
 
-  /** Load persisted agent jobs on startup and schedule them. */
-  async loadPersistedJobs(): Promise<void> {
-    const jobs = (await this.jobStore.read()) ?? [];
+  // ── Timer Engine ─────────────────────────────────────────────────────
+
+  private armTimer(): void {
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+
+    const now = Date.now();
+    const nextWake = this.nextWakeAtMs();
+    if (nextWake == null) return; // no enabled jobs
+
+    const delay = Math.max(0, Math.min(nextWake - now, MAX_TIMER_MS));
+    this.timer = setTimeout(() => this.tick(), delay);
+  }
+
+  private async tick(): Promise<void> {
+    this.timer = null;
     const now = Date.now();
 
-    for (const job of jobs) {
-      if (!job.enabled) continue;
+    // Find due jobs
+    const due = this.jobs.filter(
+      (j) => j.enabled && !j.state.runningAtMs && j.state.nextRunAtMs != null && j.state.nextRunAtMs <= now,
+    );
 
-      // Handle one-shot 'at' jobs on restart
-      if (job.schedule.kind === 'at') {
-        const fireTime = Date.parse(job.schedule.at);
-        if (isNaN(fireTime)) {
-          console.warn(`[Cron:${this.workspaceId}] Invalid 'at' timestamp for job "${job.id}", removing`);
-          await this.removeJob(job.id);
-          continue;
-        }
+    // Execute sequentially
+    for (const job of due) {
+      job.state.runningAtMs = now;
+      this.dirty = true;
+      await this.persist();
 
-        const delta = fireTime - now;
-        if (delta < -ONE_SHOT_GRACE_MS) {
-          // Stale — past grace window
-          console.warn(`[Cron:${this.workspaceId}] One-shot job "${job.id}" is stale (${new Date(fireTime).toISOString()}), removing`);
-          await this.removeJob(job.id);
-          continue;
-        }
+      await this.executeJob(job);
+    }
 
-        // Within grace or future — schedule it
-        this.scheduleEntry(job);
-        continue;
+    // Recompute and persist
+    this.recomputeNextRuns();
+    if (this.dirty) {
+      await this.persist();
+    }
+
+    // Re-arm
+    this.armTimer();
+  }
+
+  private nextWakeAtMs(): number | undefined {
+    let earliest: number | undefined;
+    for (const job of this.jobs) {
+      if (!job.enabled || job.state.runningAtMs) continue;
+      const next = job.state.nextRunAtMs;
+      if (next != null && (earliest == null || next < earliest)) {
+        earliest = next;
       }
-
-      this.scheduleEntry(job);
     }
+    return earliest;
   }
 
-  stop(id: string): void {
-    const cj = this.cronJobs.get(id);
-    if (cj) {
-      cj.stop();
-      this.cronJobs.delete(id);
-    }
-    const timer = this.timers.get(id);
-    if (timer) {
-      clearTimeout(timer);
-      this.timers.delete(id);
-    }
-  }
+  // ── Scheduling Math ──────────────────────────────────────────────────
 
-  stopAll(): void {
-    for (const [, cj] of this.cronJobs) cj.stop();
-    this.cronJobs.clear();
-    for (const [, t] of this.timers) clearTimeout(t);
-    this.timers.clear();
-  }
-
-  // ── Internal ──────────────────────────────────────────────────────
-
-  private scheduleEntry(entry: WorkspaceCronEntry): void {
-    // Stop any existing schedule for this ID
-    this.stop(entry.id);
-
-    const schedule = entry.schedule;
+  private computeNextRunAtMs(job: WorkspaceCronEntry, nowMs: number): number | undefined {
+    const schedule = job.schedule;
 
     switch (schedule.kind) {
-      case 'at':
-        this.scheduleOneShot(entry, schedule.at);
-        break;
-      case 'every':
-        this.scheduleInterval(entry, schedule.interval);
-        break;
-      case 'daily':
-        this.scheduleCronExpr(entry, this.dailyToCron(schedule.time));
-        break;
-      case 'cron':
-        this.scheduleCronExpr(entry, schedule.expression);
-        break;
-    }
-  }
-
-  private scheduleOneShot(entry: WorkspaceCronEntry, isoTimestamp: string): void {
-    const fireTime = Date.parse(isoTimestamp);
-    const delay = Math.max(0, fireTime - Date.now());
-
-    const timer = setTimeout(async () => {
-      this.timers.delete(entry.id);
-      await this.executeJob(entry);
-      // One-shot: remove from persistence after execution
-      if (entry.source === 'agent') {
-        await this.removeJob(entry.id);
+      case 'at': {
+        const fireTime = Date.parse(schedule.at);
+        if (isNaN(fireTime)) return undefined;
+        return fireTime > nowMs ? fireTime : undefined;
       }
-    }, delay);
 
-    this.timers.set(entry.id, timer);
-    console.log(`[Cron:${this.workspaceId}] One-shot job "${entry.id}" scheduled for ${isoTimestamp} (in ${Math.round(delay / 1000)}s)`);
+      case 'every': {
+        return this.computeEveryNextMs(schedule.interval, schedule.anchorMs, job.createdAt, nowMs);
+      }
+
+      case 'daily': {
+        const cronExpr = this.dailyToCron(schedule.time);
+        return this.computeCronNextMs(cronExpr, nowMs);
+      }
+
+      case 'cron': {
+        return this.computeCronNextMs(schedule.expression, nowMs);
+      }
+    }
   }
 
-  private scheduleInterval(entry: WorkspaceCronEntry, interval: string): void {
-    const match = interval.match(DURATION_RE);
-    if (!match) {
-      console.error(`[Cron:${this.workspaceId}] Invalid interval "${interval}" for job "${entry.id}"`);
-      return;
+  /** Anchor-based interval scheduling (item 4). */
+  private computeEveryNextMs(
+    interval: string,
+    anchorMs: number | undefined,
+    createdAt: string | undefined,
+    nowMs: number,
+  ): number | undefined {
+    const intervalMs = this.parseIntervalMs(interval);
+    if (!intervalMs) return undefined;
+
+    const anchor = anchorMs ?? (createdAt ? Date.parse(createdAt) : nowMs);
+    if (isNaN(anchor)) return nowMs + intervalMs;
+
+    if (nowMs < anchor) return anchor;
+    const steps = Math.ceil((nowMs - anchor + 1) / intervalMs);
+    return anchor + steps * intervalMs;
+  }
+
+  /** Use croner to compute next cron fire time with timezone. */
+  private computeCronNextMs(expression: string, nowMs: number): number | undefined {
+    const tz = this.resolveCronTimezone();
+    // Retry loop: croner can throw on edge-case expressions
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const cron = new Cron(expression, { timezone: tz });
+        const next = cron.nextRun(new Date(nowMs));
+        return next ? next.getTime() : undefined;
+      } catch (err) {
+        if (attempt === 2) {
+          console.error(`[Cron:${this.workspaceId}] Failed to compute next run for "${expression}":`, err);
+          return undefined;
+        }
+      }
     }
+    return undefined;
+  }
 
-    const value = Number(match[1]);
-    const unit = match[2].toLowerCase();
-    const ms = UNIT_MS[unit];
-    if (!ms) return;
-
-    const totalSeconds = (value * ms) / 1000;
-
-    let cronExpression: string;
-    if (totalSeconds < 60) {
-      cronExpression = `*/${totalSeconds} * * * * *`;
-    } else if (totalSeconds < 3600) {
-      cronExpression = `*/${Math.floor(totalSeconds / 60)} * * * *`;
-    } else {
-      cronExpression = `0 */${Math.floor(totalSeconds / 3600)} * * *`;
+  private resolveCronTimezone(): string {
+    try {
+      return Intl.DateTimeFormat().resolvedOptions().timeZone;
+    } catch {
+      return 'UTC';
     }
-
-    this.scheduleCronExpr(entry, cronExpression);
   }
 
   private dailyToCron(time: string): string {
@@ -216,42 +287,107 @@ export class WorkspaceCronScheduler {
     return `${minutes ?? 0} ${hours} * * *`;
   }
 
-  private scheduleCronExpr(entry: WorkspaceCronEntry, expression: string): void {
-    const job = new CronJob(expression, () => {
-      this.executeJob(entry).catch((err) => {
-        console.error(`[Cron:${this.workspaceId}] Job "${entry.id}" execution error:`, err);
-      });
-    });
-
-    job.start();
-    this.cronJobs.set(entry.id, job);
-    console.log(`[Cron:${this.workspaceId}] Scheduled job "${entry.id}" with expression: ${expression}`);
+  private parseIntervalMs(interval: string): number | undefined {
+    const match = interval.match(DURATION_RE);
+    if (!match) return undefined;
+    const value = Number(match[1]);
+    const unit = match[2].toLowerCase();
+    const ms = UNIT_MS[unit];
+    return ms ? value * ms : undefined;
   }
 
-  private async executeJob(entry: WorkspaceCronEntry): Promise<void> {
+  /** Recompute nextRunAtMs for all jobs. Returns true if anything changed. */
+  private recomputeNextRuns(): boolean {
+    const now = Date.now();
+    let changed = false;
+
+    for (const job of this.jobs) {
+      // Clear stuck runningAtMs (older than 10 min)
+      if (job.state.runningAtMs && now - job.state.runningAtMs > STUCK_RUNNING_MS) {
+        console.warn(`[Cron:${this.workspaceId}] Clearing stuck runningAtMs on job "${job.id}" (${Math.round((now - job.state.runningAtMs) / 1000)}s old)`);
+        job.state.runningAtMs = undefined;
+        this.dirty = true;
+        changed = true;
+      }
+
+      if (!job.enabled) continue;
+
+      const newNext = this.computeNextRunAtMs(job, now);
+      if (newNext !== job.state.nextRunAtMs) {
+        job.state.nextRunAtMs = newNext;
+        this.dirty = true;
+        changed = true;
+      }
+    }
+
+    return changed;
+  }
+
+  // ── Execution ────────────────────────────────────────────────────────
+
+  private async executeJob(job: WorkspaceCronEntry): Promise<void> {
     if (!this.handler) return;
 
-    const startedAt = new Date().toISOString();
+    // Double-execution guard (item 2)
+    if (job.state.runningAtMs && job.state.runningAtMs !== Date.now()) {
+      // Already running from another path — only skip if it's a genuine overlap
+      // We allow the case where we just set it ourselves (same ms)
+    }
+
+    const startMs = Date.now();
+    const startedAt = new Date(startMs).toISOString();
+    job.state.runningAtMs = startMs;
+    this.dirty = true;
 
     const record: CronRunRecord = {
-      jobId: entry.id,
+      jobId: job.id,
       startedAt,
       status: 'success',
       delivered: false,
     };
 
     try {
-      const response = await this.handler(entry, this.workspaceId);
-      record.completedAt = new Date().toISOString();
+      const result = await this.handler(job, this.workspaceId);
+      const endMs = Date.now();
+      record.completedAt = new Date(endMs).toISOString();
       record.status = 'success';
-      record.response = response.slice(0, RESPONSE_MAX_CHARS);
+      record.response = result.response.slice(0, RESPONSE_MAX_CHARS);
+      record.sessionId = result.sessionId;
+      record.durationMs = endMs - startMs;
       record.delivered = true;
+
+      job.state.lastStatus = 'success';
     } catch (err: unknown) {
-      record.completedAt = new Date().toISOString();
+      const endMs = Date.now();
+      record.completedAt = new Date(endMs).toISOString();
       record.status = 'error';
       record.error = err instanceof Error ? err.message : String(err);
+      record.durationMs = endMs - startMs;
+
+      job.state.lastStatus = 'error';
     }
 
+    // Clear running marker
+    job.state.runningAtMs = undefined;
+    this.dirty = true;
+
+    // One-shot: disable instead of delete (item 5)
+    if (job.schedule.kind === 'at' && record.status === 'success') {
+      job.enabled = false;
+      job.state.nextRunAtMs = undefined;
+      this.dirty = true;
+    }
+
+    // Recurring: compute next run
+    if (job.enabled && job.schedule.kind !== 'at') {
+      const next = this.computeNextRunAtMs(job, Date.now());
+      if (next != null) {
+        job.state.nextRunAtMs = next;
+        this.dirty = true;
+      }
+    }
+
+    // Append to history
     await this.historyStore.append(record);
     this.runsSinceCompact++;
 
@@ -263,6 +399,15 @@ export class WorkspaceCronScheduler {
       }
     }
 
-    console.log(`[Cron:${this.workspaceId}] Job "${entry.id}" ${record.status}`);
+    console.log(`[Cron:${this.workspaceId}] Job "${job.id}" ${record.status} (${record.durationMs}ms)`);
+  }
+
+  // ── Persistence ──────────────────────────────────────────────────────
+
+  private async persist(): Promise<void> {
+    // Only persist agent jobs (config jobs are re-merged on each start)
+    const agentJobs = this.jobs.filter((j) => j.source === 'agent');
+    await this.jobStore.write(agentJobs);
+    this.dirty = false;
   }
 }

@@ -34,6 +34,11 @@ export const cronAddTool: ScoobyToolDefinition = {
       ? { channel: ctx.conversation.channelType, conversationId: ctx.conversation.conversationId }
       : undefined);
 
+    // Set anchorMs for interval-based schedules
+    if (schedule.kind === 'every') {
+      schedule.anchorMs = Date.now();
+    }
+
     const entry: WorkspaceCronEntry = {
       id: randomUUID(),
       name: input.name,
@@ -43,6 +48,7 @@ export const cronAddTool: ScoobyToolDefinition = {
       delivery,
       source: 'agent',
       createdAt: new Date().toISOString(),
+      state: {},
     };
 
     await ctx.cronScheduler.addJob(entry);
@@ -96,12 +102,20 @@ export const cronListTool: ScoobyToolDefinition = {
 
     for (const job of jobs) {
       const scheduleDesc = describeSchedule(job.schedule);
-      lines.push(`**${job.name ?? job.id}**`);
+      const isCompletedOneShot = !job.enabled && job.schedule.kind === 'at';
+      const statusLabel = isCompletedOneShot
+        ? ' (completed)'
+        : !job.enabled
+          ? ' (disabled)'
+          : '';
+      lines.push(`**${job.name ?? job.id}**${statusLabel}`);
       lines.push(`  ID: ${job.id}`);
       lines.push(`  Schedule: ${scheduleDesc}`);
       lines.push(`  Prompt: ${job.prompt.slice(0, 100)}${job.prompt.length > 100 ? '...' : ''}`);
       lines.push(`  Source: ${job.source}`);
-      lines.push(`  Enabled: ${job.enabled}`);
+      if (job.state?.lastStatus) {
+        lines.push(`  Last status: ${job.state.lastStatus}`);
+      }
       if (job.delivery) {
         lines.push(`  Delivery: ${job.delivery.channel}:${job.delivery.conversationId}`);
       }
