@@ -779,6 +779,13 @@ async function main() {
         const memProvider = memoryProviders.get(workspaceId);
         return resolveCitations(config.memory, memProvider?.backendName ?? 'builtin');
       },
+      resolveAgent: async (workspaceId, session, userMessage) => {
+        const wsConfig = config.workspaces.find(w => w.id === workspaceId) ?? config.workspaces[0];
+        const sessionMgr = sessionManagers.get(workspaceId)!;
+        return resolveAgent(session as any, userMessage, wsConfig, sessionMgr);
+      },
+      getAvailableAgentsForPrompt,
+      debug: config.debug ?? false,
       askChannelUser,
     });
     gateway.getApp().route('/', chatApi);
@@ -904,55 +911,79 @@ async function main() {
     });
 
     // Run agent
-    const agentRunner = new AgentRunner(toolRegistry, cooldowns, sessionMgr);
     const transcript = await sessionMgr.getTranscript(session.id);
-    const messages = await transcriptToMessages(transcript);
+    let wsMsgs = await transcriptToMessages(transcript);
 
     // Get memory context
     const memProvider = memoryProviders.get(workspaceId);
     const memoryContext = memProvider && text
       ? await memProvider.getContextForPrompt(workspaceId, text) : [];
 
-    const toolCtx = buildToolContext(ws, session.id, workspaceId, 'webchat', connectionId);
+    let wsCurrentAgent = resolvedAgent;
+    let wsCurrentAgentId = agentId;
 
-    // Stream response back via WebSocket
-    const stream = agentRunner.run({
-      messages,
-      workspaceId,
-      workspacePath: ws.path,
-      agent: resolvedAgent,
-      sessionId: session.id,
-      toolContext: toolCtx,
-      globalModels: {
-        fast: config.models.fast.candidates,
-        slow: config.models.slow.candidates,
-      },
-      workspaceModels: await getWorkspaceModels(workspaceId),
-      memoryContext,
-      usageTracker: usageTrackers.get(workspaceId),
-      agentName: resolvedAgent.name,
-      channelType: 'webchat',
-      availableAgents: getAvailableAgentsForPrompt(),
-      citationsEnabled: resolveCitations(config.memory, memProvider?.backendName ?? 'builtin'),
-      memoryBackend: memProvider?.backendName,
-    });
-
-    // Process stream events and forward to WebSocket
-    (async () => {
-      let fullResponse = '';
-      for await (const event of stream) {
-        gateway.sendEvent(connectionId, `chat.${event.type}`, event);
-        if (event.type === 'done') {
-          fullResponse = event.response;
-        }
-      }
-      // Debug signature
-      if (config.debug && fullResponse) {
-        gateway.sendEvent(connectionId, 'chat.debug', {
-          agent: `${resolvedAgent.emoji} ${resolvedAgent.name}`,
+    // Run agent with auto re-run on agent switch
+    const runAgent = async () => {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const agentRunner = new AgentRunner(toolRegistry, cooldowns, sessionMgr);
+        const stream = agentRunner.run({
+          messages: wsMsgs,
+          workspaceId,
+          workspacePath: ws.path,
+          agent: wsCurrentAgent,
+          sessionId: session.id,
+          toolContext: buildToolContext(ws, session.id, workspaceId, 'webchat', connectionId),
+          globalModels: {
+            fast: config.models.fast.candidates,
+            slow: config.models.slow.candidates,
+          },
+          workspaceModels: await getWorkspaceModels(workspaceId),
+          memoryContext,
+          usageTracker: usageTrackers.get(workspaceId),
+          agentName: wsCurrentAgent.name,
+          channelType: 'webchat',
+          availableAgents: getAvailableAgentsForPrompt(),
+          citationsEnabled: resolveCitations(config.memory, memProvider?.backendName ?? 'builtin'),
+          memoryBackend: memProvider?.backendName,
         });
+
+        let fullResponse = '';
+        for await (const event of stream) {
+          gateway.sendEvent(connectionId, `chat.${event.type}`, event);
+          if (event.type === 'done') {
+            fullResponse = event.response;
+          }
+        }
+
+        // Check if agent switch happened
+        if (attempt === 0) {
+          const updatedSession = await sessionMgr.getSession('webchat', connectionId);
+          if (updatedSession?.agentId && updatedSession.agentId !== wsCurrentAgentId) {
+            const newAgent = agentRegistry.get(updatedSession.agentId);
+            if (newAgent) {
+              wsCurrentAgent = newAgent;
+              wsCurrentAgentId = updatedSession.agentId;
+              console.log(`[Scooby] Agent switch (ws): ${resolvedAgent.name} -> ${newAgent.name}`);
+
+              // Refresh transcript for the new agent
+              const freshTranscript = await sessionMgr.getTranscript(session.id);
+              wsMsgs = await transcriptToMessages(freshTranscript);
+              continue;
+            }
+          }
+        }
+
+        // Debug signature
+        if (config.debug && fullResponse) {
+          gateway.sendEvent(connectionId, 'chat.debug', {
+            agent: `${wsCurrentAgent.emoji} ${wsCurrentAgent.name}`,
+          });
+        }
+        break;
       }
-    })().catch((err) => {
+    };
+
+    runAgent().catch((err) => {
       console.error(`[Scooby] Stream error for connection ${connectionId}:`, err);
       gateway.sendEvent(connectionId, 'chat.error', { error: String(err) });
     });
@@ -1265,7 +1296,7 @@ async function main() {
 
     // Get transcript for context
     const transcript = await sessionMgr.getTranscript(session.id);
-    const messages = await transcriptToMessages(transcript);
+    let messages = await transcriptToMessages(transcript);
 
     // Get memory context (with scope enforcement)
     const memProviderForChannel = memoryProviders.get(workspaceId);
@@ -1281,39 +1312,84 @@ async function main() {
     }
 
     const toolCtx = buildToolContext(ws, session.id, workspaceId, msg.channelType, msg.conversationId);
-    const agentRunner = new AgentRunner(toolRegistry, cooldowns, sessionMgr);
 
+    let currentAgent = resolvedAgent;
+    let currentAgentId = agentId;
     let fullResponse = '';
-    for await (const event of agentRunner.run({
-      messages,
-      workspaceId,
-      workspacePath: ws.path,
-      agent: resolvedAgent,
-      sessionId: session.id,
-      toolContext: toolCtx,
-      globalModels: {
-        fast: config.models.fast.candidates,
-        slow: config.models.slow.candidates,
-      },
-      workspaceModels: await getWorkspaceModels(workspaceId),
-      memoryContext,
-      usageTracker: usageTrackers.get(workspaceId),
-      agentName: resolvedAgent.name,
-      channelType: msg.channelType,
-      citationsEnabled: resolveCitations(config.memory, memProviderForChannel?.backendName ?? 'builtin'),
-      memoryBackend: memProviderForChannel?.backendName,
-      availableAgents: getAvailableAgentsForPrompt(),
-    })) {
-      if (event.type === 'done') {
-        fullResponse = event.response;
+
+    // Run agent (with automatic re-run on agent switch)
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const agentRunner = new AgentRunner(toolRegistry, cooldowns, sessionMgr);
+      fullResponse = '';
+
+      for await (const event of agentRunner.run({
+        messages,
+        workspaceId,
+        workspacePath: ws.path,
+        agent: currentAgent,
+        sessionId: session.id,
+        toolContext: buildToolContext(ws, session.id, workspaceId, msg.channelType, msg.conversationId),
+        globalModels: {
+          fast: config.models.fast.candidates,
+          slow: config.models.slow.candidates,
+        },
+        workspaceModels: await getWorkspaceModels(workspaceId),
+        memoryContext,
+        usageTracker: usageTrackers.get(workspaceId),
+        agentName: currentAgent.name,
+        channelType: msg.channelType,
+        citationsEnabled: resolveCitations(config.memory, memProviderForChannel?.backendName ?? 'builtin'),
+        memoryBackend: memProviderForChannel?.backendName,
+        availableAgents: getAvailableAgentsForPrompt(),
+      })) {
+        if (event.type === 'done') {
+          fullResponse = event.response;
+        }
       }
+
+      // Check if an agent switch happened during this run
+      if (attempt === 0) {
+        const updatedSession = await sessionMgr.getSession(msg.channelType, msg.conversationId);
+        if (updatedSession?.agentId && updatedSession.agentId !== currentAgentId) {
+          const newAgent = agentRegistry.get(updatedSession.agentId);
+          if (newAgent) {
+            // Send handoff notice if the old agent produced one
+            if (fullResponse) {
+              const adapter = channelAdapters.find((a) => a.type === msg.channelType);
+              if (adapter) {
+                const handoffText = config.debug
+                  ? `${fullResponse}\n\n--- ${currentAgent.emoji} ${currentAgent.name}`
+                  : fullResponse;
+                const prepared = prepareOutboundText(handoffText, 'markdown', adapter.outputFormat);
+                await adapter.send({
+                  conversationId: msg.conversationId,
+                  text: prepared.text,
+                  format: prepared.format,
+                });
+              }
+            }
+
+            // Re-run with the new agent
+            currentAgent = newAgent;
+            currentAgentId = updatedSession.agentId;
+            console.log(`[Scooby] Agent switch: ${resolvedAgent.name} -> ${newAgent.name}`);
+
+            // Refresh transcript (it now includes the handoff tool call)
+            const freshTranscript = await sessionMgr.getTranscript(session.id);
+            messages = await transcriptToMessages(freshTranscript);
+            continue;
+          }
+        }
+      }
+
+      break;
     }
 
     // Send response back through channel
     if (fullResponse) {
       // Debug signature
       if (config.debug) {
-        fullResponse += `\n\n--- ${resolvedAgent.emoji} ${resolvedAgent.name}`;
+        fullResponse += `\n\n--- ${currentAgent.emoji} ${currentAgent.name}`;
       }
 
       const adapter = channelAdapters.find((a) => a.type === msg.channelType);

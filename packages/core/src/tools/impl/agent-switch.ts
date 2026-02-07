@@ -10,7 +10,7 @@ export const agentSwitchTool: ScoobyToolDefinition = {
   name: 'agent_switch',
   description:
     'Hand off the conversation to a different agent who is better suited for the request. ' +
-    'The switch takes effect on the next message — the current response completes normally.',
+    'The new agent will take over immediately to handle the user\'s request.',
   inputSchema,
   async execute(input, ctx) {
     const { targetAgentId, reason } = input;
@@ -30,6 +30,6 @@ export const agentSwitchTool: ScoobyToolDefinition = {
     }
 
     await ctx.setSessionAgent(targetAgentId);
-    return `Switching to ${target.emoji} ${target.name}. Reason: ${reason}. The switch takes effect on the next message.`;
+    return `Switching to ${target.emoji} ${target.name}. Reason: ${reason}.`;
   },
 };

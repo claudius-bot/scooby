@@ -35,6 +35,12 @@ export interface ChatCompletionsContext {
   getUsageTracker: (workspaceId: string) => import('@scooby/core').UsageTracker | undefined;
   getModelOverrideStore?: (workspaceId: string) => import('@scooby/core').ModelOverrideStore | undefined;
   resolveCitations: (workspaceId: string) => boolean;
+  resolveAgent?: (workspaceId: string, session: { id: string; agentId?: string }, userMessage: string) => Promise<{
+    agent: import('@scooby/core').AgentProfile;
+    agentId: string;
+  }>;
+  getAvailableAgentsForPrompt?: () => Array<{ id: string; name: string; emoji: string; about: string }>;
+  debug?: boolean;
   askChannelUser?: (params: {
     channelType: string;
     conversationId: string;
@@ -298,9 +304,19 @@ export function createChatCompletionsApi(ctx: ChatCompletionsContext) {
       });
     }
 
-    // 6. Get transcript and build full message list
+    // 6. Resolve agent for this session
+    const userText = lastUserMessage?.content ?? '';
+    let resolvedAgent = workspace.agent;
+    let resolvedAgentId = 'default';
+    if (ctx.resolveAgent) {
+      const resolved = await ctx.resolveAgent(workspaceId, session, userText);
+      resolvedAgent = resolved.agent;
+      resolvedAgentId = resolved.agentId;
+    }
+
+    // 7. Get transcript and build full message list
     const transcript = await sessionMgr.getTranscript(session.id);
-    const fullMessages = await transcriptToMessages(transcript);
+    let fullMessages = await transcriptToMessages(transcript);
 
     // Get memory context
     const memProvider = ctx.getMemoryProvider(workspaceId);
@@ -309,89 +325,127 @@ export function createChatCompletionsApi(ctx: ChatCompletionsContext) {
       : [];
 
     const globalModels = ctx.getGlobalModels();
-    const toolCtx = ctx.getToolContext(workspaceId, session.id);
 
     // Resolve workspace-level model overrides
     const workspaceModels = ctx.getModelOverrideStore
       ? await ctx.getModelOverrideStore(workspaceId)?.getWorkspaceModels()
       : undefined;
 
-    // 7. Run agent
-    const agentRunner = ctx.createAgentRunner(workspaceId);
-    const runOptions: AgentRunOptions = {
-      messages: fullMessages,
-      workspaceId,
-      workspacePath: workspace.path,
-      agent: workspace.agent,
-      sessionId: session.id,
-      toolContext: toolCtx,
-      globalModels: {
-        fast: globalModels.fast,
-        slow: globalModels.slow,
-      },
-      workspaceModels,
-      memoryContext,
-      usageTracker: ctx.getUsageTracker(workspaceId),
-      agentName: workspace.agent.name,
-      channelType: 'api',
-      citationsEnabled: ctx.resolveCitations(workspaceId),
-      memoryBackend: memProvider?.backendName,
-    };
-
     const modelName = `scooby:${workspaceId}`;
 
+    // 8. Run agent (with re-run on agent switch for non-streaming)
     if (stream) {
+      const agentRunner = ctx.createAgentRunner(workspaceId);
+      const runOptions: AgentRunOptions = {
+        messages: fullMessages,
+        workspaceId,
+        workspacePath: workspace.path,
+        agent: resolvedAgent,
+        sessionId: session.id,
+        toolContext: ctx.getToolContext(workspaceId, session.id),
+        globalModels: { fast: globalModels.fast, slow: globalModels.slow },
+        workspaceModels,
+        memoryContext,
+        usageTracker: ctx.getUsageTracker(workspaceId),
+        agentName: resolvedAgent.name,
+        channelType: 'api',
+        citationsEnabled: ctx.resolveCitations(workspaceId),
+        memoryBackend: memProvider?.backendName,
+        availableAgents: ctx.getAvailableAgentsForPrompt?.(),
+      };
       return streamResponse(c, agentRunner, runOptions, completionId, created, modelName);
     } else {
-      return nonStreamResponse(c, agentRunner, runOptions, completionId, created, modelName);
+      let currentAgent = resolvedAgent;
+      let currentAgentId = resolvedAgentId;
+      let fullResponse = '';
+      let handoffNotice = '';
+      let promptTokens = 0;
+      let completionTokens = 0;
+
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const agentRunner = ctx.createAgentRunner(workspaceId);
+        fullResponse = '';
+        promptTokens = 0;
+        completionTokens = 0;
+
+        for await (const event of agentRunner.run({
+          messages: fullMessages,
+          workspaceId,
+          workspacePath: workspace.path,
+          agent: currentAgent,
+          sessionId: session.id,
+          toolContext: ctx.getToolContext(workspaceId, session.id),
+          globalModels: { fast: globalModels.fast, slow: globalModels.slow },
+          workspaceModels,
+          memoryContext,
+          usageTracker: ctx.getUsageTracker(workspaceId),
+          agentName: currentAgent.name,
+          channelType: 'api',
+          citationsEnabled: ctx.resolveCitations(workspaceId),
+          memoryBackend: memProvider?.backendName,
+          availableAgents: ctx.getAvailableAgentsForPrompt?.(),
+        })) {
+          if (event.type === 'text-delta') {
+            fullResponse += event.content;
+          } else if (event.type === 'done') {
+            fullResponse = event.response;
+            promptTokens = event.usage.promptTokens;
+            completionTokens = event.usage.completionTokens;
+          }
+        }
+
+        // Check if an agent switch happened
+        if (attempt === 0 && ctx.resolveAgent) {
+          const updatedSession = await sessionMgr.getSession('api', sessionKey);
+          if (updatedSession?.agentId && updatedSession.agentId !== currentAgentId) {
+            const resolved = await ctx.resolveAgent(workspaceId, updatedSession, '');
+            if (resolved.agentId !== currentAgentId) {
+              // Save handoff notice from old agent
+              handoffNotice = fullResponse || `Switching to ${resolved.agent.emoji ?? ''} ${resolved.agent.name}...`.trim();
+              currentAgent = resolved.agent;
+              currentAgentId = resolved.agentId;
+              // Refresh transcript for re-run
+              const freshTranscript = await sessionMgr.getTranscript(session.id);
+              fullMessages = await transcriptToMessages(freshTranscript);
+              continue;
+            }
+          }
+        }
+        break;
+      }
+
+      // Prepend handoff notice if agent was switched
+      if (handoffNotice && fullResponse) {
+        fullResponse = `${handoffNotice}\n\n${fullResponse}`;
+      } else if (handoffNotice && !fullResponse) {
+        fullResponse = handoffNotice;
+      }
+
+      // Debug signature
+      if (ctx.debug && fullResponse) {
+        fullResponse += `\n\n--- ${currentAgent.emoji ?? ''} ${currentAgent.name}`.trim();
+      }
+
+      return c.json({
+        id: completionId,
+        object: 'chat.completion',
+        created,
+        model: modelName,
+        choices: [{
+          index: 0,
+          message: { role: 'assistant', content: fullResponse },
+          finish_reason: 'stop',
+        }],
+        usage: {
+          prompt_tokens: promptTokens,
+          completion_tokens: completionTokens,
+          total_tokens: promptTokens + completionTokens,
+        },
+      });
     }
   });
 
   return app;
-}
-
-// ── Non-streaming ───────────────────────────────────────────────────
-
-async function nonStreamResponse(
-  c: any,
-  agentRunner: AgentRunner,
-  options: AgentRunOptions,
-  id: string,
-  created: number,
-  model: string,
-) {
-  let fullResponse = '';
-  let promptTokens = 0;
-  let completionTokens = 0;
-
-  for await (const event of agentRunner.run(options)) {
-    if (event.type === 'text-delta') {
-      fullResponse += event.content;
-    } else if (event.type === 'done') {
-      fullResponse = event.response;
-      promptTokens = event.usage.promptTokens;
-      completionTokens = event.usage.completionTokens;
-    }
-  }
-
-  return c.json({
-    id,
-    object: 'chat.completion',
-    created,
-    model,
-    choices: [
-      {
-        index: 0,
-        message: { role: 'assistant', content: fullResponse },
-        finish_reason: 'stop',
-      },
-    ],
-    usage: {
-      prompt_tokens: promptTokens,
-      completion_tokens: completionTokens,
-      total_tokens: promptTokens + completionTokens,
-    },
-  });
 }
 
 // ── Streaming ───────────────────────────────────────────────────────

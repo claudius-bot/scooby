@@ -165,6 +165,7 @@ export class AgentRunner {
     }
 
     let fullResponse = '';
+    let lastToolResult = '';
     let totalPromptTokens = 0;
     let totalCompletionTokens = 0;
     let currentMessages = [...options.messages];
@@ -227,10 +228,11 @@ export class AgentRunner {
               toolCallsInRun.push({ toolName: part.toolName, args: part.input, result: undefined });
               break;
             case 'tool-result':
+              lastToolResult = typeof part.output === 'string' ? part.output : JSON.stringify(part.output);
               yield {
                 type: 'tool-result',
                 toolName: part.toolName,
-                result: typeof part.output === 'string' ? part.output : JSON.stringify(part.output),
+                result: lastToolResult,
               };
               // Update the last matching tool call with its result
               const lastCall = [...toolCallsInRun]
@@ -277,6 +279,11 @@ export class AgentRunner {
         if (!needsEscalationRerun) {
           break;
         }
+      }
+
+      // If model produced no text but did call tools, use the last tool result as response
+      if (!fullResponse && lastToolResult) {
+        fullResponse = lastToolResult;
       }
 
       // Record final response to transcript
