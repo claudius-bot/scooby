@@ -20,8 +20,9 @@ import {
   BuiltinSearchProvider,
   FallbackSearchProvider,
   QmdMemoryManager,
-  CronScheduler,
+  WorkspaceCronScheduler,
   Heartbeat,
+  WorkspaceHeartbeat,
   WebhookManager,
   UsageTracker,
   loadUsageSummary,
@@ -53,6 +54,9 @@ import {
   phoneCallTool,
   activeCallRegistry,
   loadSkills,
+  cronAddTool,
+  cronRemoveTool,
+  cronListTool,
 } from '@scooby/core';
 import {
   TelegramAdapter,
@@ -261,6 +265,7 @@ async function main() {
       memoryService: memService,
       memoryProvider: memoryProviders.get(workspaceId),
       citationsEnabled: resolveCitations(config.memory, memoryProviders.get(workspaceId)?.backendName ?? 'builtin'),
+      cronScheduler: cronSchedulers.get(workspaceId),
     };
 
     const transcript = await sessionMgr.getTranscript(sessionId);
@@ -325,6 +330,9 @@ async function main() {
   toolRegistry.register(fileMoveTool);
   toolRegistry.register(fileSearchTool);
   toolRegistry.register(phoneCallTool);
+  toolRegistry.register(cronAddTool);
+  toolRegistry.register(cronRemoveTool);
+  toolRegistry.register(cronListTool);
 
   // 6b. Create command processor, code manager, and workspace management
   const commandRegistry = createDefaultRegistry();
@@ -618,6 +626,7 @@ async function main() {
           memoryService: memoryServices.get(workspaceId),
           memoryProvider: memProvider,
           citationsEnabled: resolveCitations(config.memory, memProvider?.backendName ?? 'builtin'),
+          cronScheduler: cronSchedulers.get(workspaceId),
         };
       },
       getGlobalModels: () => ({
@@ -771,6 +780,7 @@ async function main() {
       memoryService: memoryServices.get(workspaceId),
       memoryProvider: memProvider,
       citationsEnabled: resolveCitations(config.memory, memProvider?.backendName ?? 'builtin'),
+      cronScheduler: cronSchedulers.get(workspaceId),
     };
 
     // Stream response back via WebSocket
@@ -1132,6 +1142,7 @@ async function main() {
       memoryService: memoryServices.get(workspaceId),
       memoryProvider: memProviderForChannel,
       citationsEnabled: resolveCitations(config.memory, memProviderForChannel?.backendName ?? 'builtin'),
+      cronScheduler: cronSchedulers.get(workspaceId),
     };
 
     const agentRunner = new AgentRunner(toolRegistry, cooldowns, sessionMgr);
@@ -1181,57 +1192,83 @@ async function main() {
     });
   }
 
-  // 12. Cron scheduler
-  const cronScheduler = new CronScheduler(resolve(configDir, 'data'));
-  cronScheduler.onJob(async (job) => {
-    const ws = workspaces.get(job.workspace);
-    if (!ws) return;
+  // 12. Per-workspace cron schedulers
+  const cronSchedulers = new Map<string, WorkspaceCronScheduler>();
 
-    const sessionMgr = sessionManagers.get(job.workspace)!;
-    const session = await sessionMgr.getOrCreate('cron', `cron:${job.id}`);
+  for (const [id, ws] of workspaces) {
+    const scheduler = new WorkspaceCronScheduler(id, resolve(ws.path, 'data'));
 
-    const cronMemProvider = memoryProviders.get(job.workspace);
-    const toolCtx: ToolContext = {
-      workspace: { id: ws.id, path: ws.path },
-      session: { id: session.id, workspaceId: job.workspace },
-      permissions: ws.permissions,
-      sendMessage,
-      memoryService: memoryServices.get(job.workspace),
-      memoryProvider: cronMemProvider,
-      citationsEnabled: resolveCitations(config.memory, cronMemProvider?.backendName ?? 'builtin'),
-    };
+    scheduler.onJob(async (job, workspaceId) => {
+      const wsForJob = workspaces.get(workspaceId);
+      if (!wsForJob) return '';
 
-    const agentRunner = new AgentRunner(toolRegistry, cooldowns, sessionMgr);
-    for await (const _event of agentRunner.run({
-      messages: [{ role: 'user', content: job.prompt }],
-      workspaceId: job.workspace,
-      workspacePath: ws.path,
-      agent: ws.agent,
-      sessionId: session.id,
-      toolContext: toolCtx,
-      globalModels: {
-        fast: config.models.fast.candidates,
-        slow: config.models.slow.candidates,
-      },
-      usageTracker: usageTrackers.get(job.workspace),
-      agentName: ws.agent.name,
-      channelType: 'cron',
-      citationsEnabled: resolveCitations(config.memory, cronMemProvider?.backendName ?? 'builtin'),
-      memoryBackend: cronMemProvider?.backendName,
-    })) {
-      // Consume stream
+      const sessionMgr = sessionManagers.get(workspaceId)!;
+      const session = await sessionMgr.getOrCreate('cron', `cron:${job.id}`);
+
+      const cronMemProvider = memoryProviders.get(workspaceId);
+      const toolCtx: ToolContext = {
+        workspace: { id: wsForJob.id, path: wsForJob.path },
+        session: { id: session.id, workspaceId },
+        permissions: wsForJob.permissions,
+        sendMessage,
+        memoryService: memoryServices.get(workspaceId),
+        memoryProvider: cronMemProvider,
+        citationsEnabled: resolveCitations(config.memory, cronMemProvider?.backendName ?? 'builtin'),
+        cronScheduler: scheduler,
+      };
+
+      const agentRunner = new AgentRunner(toolRegistry, cooldowns, sessionMgr);
+      let response = '';
+      for await (const event of agentRunner.run({
+        messages: [{ role: 'user', content: job.prompt }],
+        workspaceId,
+        workspacePath: wsForJob.path,
+        agent: wsForJob.agent,
+        sessionId: session.id,
+        toolContext: toolCtx,
+        globalModels: {
+          fast: config.models.fast.candidates,
+          slow: config.models.slow.candidates,
+        },
+        usageTracker: usageTrackers.get(workspaceId),
+        agentName: wsForJob.agent.name,
+        channelType: 'cron',
+        citationsEnabled: resolveCitations(config.memory, cronMemProvider?.backendName ?? 'builtin'),
+        memoryBackend: cronMemProvider?.backendName,
+      })) {
+        if (event.type === 'done') {
+          response = event.response;
+        }
+      }
+
+      // Delivery routing
+      if (response && job.delivery) {
+        await sendMessage(job.delivery.channel, {
+          conversationId: job.delivery.conversationId,
+          text: response,
+          format: 'markdown',
+        });
+      }
+
+      console.log(`[Cron] Job "${job.id}" completed for workspace ${workspaceId}`);
+      return response;
+    });
+
+    // Schedule config-defined jobs
+    const wsConfig = config.workspaces.find((w) => w.id === id);
+    if (wsConfig?.cron) {
+      for (const entry of wsConfig.cron) {
+        await scheduler.schedule(entry);
+      }
     }
 
-    console.log(`[Cron] Job "${job.id}" completed`);
-  });
+    // Load persisted agent-created jobs
+    await scheduler.loadPersistedJobs();
 
-  if (config.cron) {
-    for (const job of config.cron) {
-      await cronScheduler.schedule(job);
-    }
+    cronSchedulers.set(id, scheduler);
   }
 
-  // 13. Heartbeat
+  // 13. Infrastructure heartbeat (idle session sweep)
   const heartbeatConfig = config.heartbeat ?? { intervalMinutes: 5 };
   const heartbeat = new Heartbeat({ intervalMinutes: heartbeatConfig.intervalMinutes ?? 5 });
 
@@ -1243,6 +1280,70 @@ async function main() {
       }
     }
   });
+
+  // 13b. Per-workspace agent heartbeats
+  const workspaceHeartbeats: WorkspaceHeartbeat[] = [];
+  for (const [id, ws] of workspaces) {
+    const hbConfig = ws.config.heartbeat;
+    if (!hbConfig?.enabled) continue;
+
+    const hb = new WorkspaceHeartbeat({
+      workspaceId: id,
+      workspacePath: ws.path,
+      config: hbConfig,
+      runAgent: async (prompt) => {
+        const sessionMgr = sessionManagers.get(id)!;
+        const session = await sessionMgr.getOrCreate('heartbeat', `heartbeat:${id}`);
+        const hbMemProvider = memoryProviders.get(id);
+
+        const toolCtx: ToolContext = {
+          workspace: { id: ws.id, path: ws.path },
+          session: { id: session.id, workspaceId: id },
+          permissions: ws.permissions,
+          sendMessage,
+          memoryService: memoryServices.get(id),
+          memoryProvider: hbMemProvider,
+          citationsEnabled: resolveCitations(config.memory, hbMemProvider?.backendName ?? 'builtin'),
+          cronScheduler: cronSchedulers.get(id),
+        };
+
+        const agentRunner = new AgentRunner(toolRegistry, cooldowns, sessionMgr);
+        let response = '';
+        for await (const event of agentRunner.run({
+          messages: [{ role: 'user', content: prompt }],
+          workspaceId: id,
+          workspacePath: ws.path,
+          agent: ws.agent,
+          sessionId: session.id,
+          toolContext: toolCtx,
+          globalModels: {
+            fast: config.models.fast.candidates,
+            slow: config.models.slow.candidates,
+          },
+          usageTracker: usageTrackers.get(id),
+          agentName: ws.agent.name,
+          channelType: 'heartbeat',
+        })) {
+          if (event.type === 'done') {
+            response = event.response;
+          }
+        }
+        return response;
+      },
+      deliver: async (text) => {
+        if (hbConfig.delivery) {
+          await sendMessage(hbConfig.delivery.channel, {
+            conversationId: hbConfig.delivery.conversationId,
+            text,
+            format: 'markdown',
+          });
+        }
+      },
+    });
+
+    hb.start();
+    workspaceHeartbeats.push(hb);
+  }
 
   // 14. Webhook manager
   const webhookManager = new WebhookManager();
@@ -1262,6 +1363,7 @@ async function main() {
       memoryService: memoryServices.get(workspaceId),
       memoryProvider: webhookMemProvider,
       citationsEnabled: resolveCitations(config.memory, webhookMemProvider?.backendName ?? 'builtin'),
+      cronScheduler: cronSchedulers.get(workspaceId),
     };
 
     const agentRunner = new AgentRunner(toolRegistry, cooldowns, sessionMgr);
@@ -1311,7 +1413,8 @@ async function main() {
     console.log(`\n[Scooby] Received ${signal}, shutting down...`);
 
     heartbeat.stop();
-    cronScheduler.stopAll();
+    for (const hb of workspaceHeartbeats) hb.stop();
+    for (const [, scheduler] of cronSchedulers) scheduler.stopAll();
     messageQueue.dispose();
 
     for (const adapter of channelAdapters) {

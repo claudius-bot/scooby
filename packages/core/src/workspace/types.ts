@@ -27,6 +27,8 @@ export interface AgentProfile {
   welcomeContext?: string;
   /** Contents of SCRATCHPAD.md — short-term mutable notes. */
   scratchpad: string;
+  /** Contents of HEARTBEAT.md — periodic heartbeat checklist. */
+  heartbeatChecklist: string;
 }
 
 /**
