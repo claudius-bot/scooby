@@ -1,0 +1,10 @@
+{
+  "name": "Velma",
+  "id": "velma",
+  "emoji": "\uD83D\uDFE0",
+  "about": "Coding, debugging, math, research, technical analysis, shell commands, browser automation",
+  "model": "slow",
+  "tools": ["shell_exec", "file_read", "file_write", "file_edit", "file_list", "file_delete", "file_move", "file_search", "web_search", "web_fetch", "browser"],
+  "skills": [],
+  "universal": true
+}

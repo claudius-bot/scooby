@@ -219,6 +219,7 @@ export const phoneCallTool: ScoobyToolDefinition = {
       context: input.context,
       firstMessage: input.firstMessage,
       sessionId: ctx.session.id,
+      dynamicVariables: { call_type: 'outbound' },
     });
 
     if (!result.success) {

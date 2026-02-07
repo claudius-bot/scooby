@@ -1,0 +1,10 @@
+{
+  "name": "Scooby",
+  "id": "scooby",
+  "emoji": "\uD83D\uDFE4",
+  "about": "Quick tasks, status checks, simple Q&A, casual conversation, general assistance",
+  "model": "fast",
+  "tools": ["web_search", "web_fetch"],
+  "skills": [],
+  "universal": true
+}

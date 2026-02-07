@@ -35,6 +35,12 @@ export interface ChatCompletionsContext {
   getUsageTracker: (workspaceId: string) => import('@scooby/core').UsageTracker | undefined;
   getModelOverrideStore?: (workspaceId: string) => import('@scooby/core').ModelOverrideStore | undefined;
   resolveCitations: (workspaceId: string) => boolean;
+  resolveAgent?: (workspaceId: string, session: { id: string; agentId?: string }, userMessage: string) => Promise<{
+    agent: import('@scooby/core').AgentProfile;
+    agentId: string;
+  }>;
+  getAvailableAgentsForPrompt?: () => Array<{ id: string; name: string; emoji: string; about: string }>;
+  debug?: boolean;
   askChannelUser?: (params: {
     channelType: string;
     conversationId: string;
@@ -61,6 +67,32 @@ function parseWorkspaceFromModel(model: string): string | null {
 }
 
 // ── Daphne – dedicated voice agent for phone calls ──────────────────
+
+const DAPHNE_OUTBOUND_SYSTEM_PROMPT = `You are Daphne, a personal assistant who has placed a phone call on behalf of your employer to accomplish a specific task.
+
+CRITICAL — WHO YOU ARE TALKING TO:
+- You are NOT talking to your employer or boss. You are talking to a STRANGER — an employee at a business, a service provider, a receptionist, or some other third party.
+- Your employer asked you to call this person/business to get something done (e.g., make a reservation, check an order status, schedule an appointment, ask a question).
+- Think of yourself as a human secretary or executive assistant calling on behalf of your boss.
+
+HOW TO BEHAVE:
+- Be polite, professional, and direct. State your purpose early in the conversation.
+- You already know what you need — the task details are provided below. Do NOT ask the person on the phone what you want. YOU are the one making the request.
+- Keep responses concise. This is a voice call, not a text chat.
+- Do NOT reveal that you are an AI unless directly asked.
+- Do NOT act as an assistant to the person you are speaking with. You are a caller with a specific purpose — you are NOT their helper or customer service agent.
+- NEVER say things like "Is there anything else I can help you with?", "How can I assist you?", "What can I do for you?", or anything that implies you are serving the person on the phone. They are serving YOU — you are the customer/caller.
+- Once your task is accomplished, confirm any important details (e.g., reservation time, confirmation number), say thank you, and say goodbye. Do not linger, make small talk, or ask if they need anything.
+- If the business asks for a name, use the name provided in your task context, or say "let me check" and use the ask_user tool.
+
+ASKING YOUR EMPLOYER:
+- You have an "ask_user" tool that sends a text message to your employer and waits for their reply.
+- Use it ONLY when a decision arises that you cannot make on your own (e.g., the requested time is unavailable and you need to confirm an alternative).
+- While waiting, politely tell the person on the phone to hold for a moment (e.g., "Let me just check on that, one moment please.").
+- Once you receive the reply, continue the conversation naturally.
+- Only use ask_user when truly necessary — prefer making reasonable decisions yourself.
+
+YOUR TASK:`;
 
 const DAPHNE_SYSTEM_PROMPT = `You are Daphne, a personal assistant making a phone call on behalf of your employer.
 
@@ -104,6 +136,14 @@ function isVoiceCallRequest(messages: OpenAIMessage[]): boolean {
  */
 function buildDaphneSystemPrompt(elevenLabsSystemContent: string): string {
   return `${DAPHNE_SYSTEM_PROMPT}\n${elevenLabsSystemContent}`;
+}
+
+/**
+ * Build Daphne's outbound call system prompt. Used when Daphne is calling
+ * a business/third party on behalf of the user (x-call-type: outbound).
+ */
+function buildOutboundDaphneSystemPrompt(elevenLabsSystemContent: string): string {
+  return `${DAPHNE_OUTBOUND_SYSTEM_PROMPT}\n${elevenLabsSystemContent}`;
 }
 
 /**
@@ -222,13 +262,17 @@ export function createChatCompletionsApi(ctx: ChatCompletionsContext) {
     // dedicated, lightweight voice agent — instead of the full bot.
     if (isVoiceCallRequest(messages)) {
       const systemMsg = messages.find((m) => m.role === 'system');
-      const daphneSystem = buildDaphneSystemPrompt(systemMsg?.content ?? '');
       const conversationMessages = toAiSdkMessages(messages);
       const globalModels = ctx.getGlobalModels();
-      const modelName = 'daphne';
-
-      // Read session ID from request header to identify the active call
       const callSessionId = c.req.header('x-scooby-session-id') ?? null;
+      const callType = c.req.header('x-call-type');
+
+      // Choose system prompt based on call type
+      const daphneSystem = callType === 'outbound'
+        ? buildOutboundDaphneSystemPrompt(systemMsg?.content ?? '')
+        : buildDaphneSystemPrompt(systemMsg?.content ?? '');
+
+      const modelName = callType === 'outbound' ? 'daphne-outbound' : 'daphne';
 
       // Prefer fast models for low-latency voice responses
       const candidates: FailoverCandidate[] = globalModels.fast.map((c) => ({
@@ -298,9 +342,19 @@ export function createChatCompletionsApi(ctx: ChatCompletionsContext) {
       });
     }
 
-    // 6. Get transcript and build full message list
+    // 6. Resolve agent for this session
+    const userText = lastUserMessage?.content ?? '';
+    let resolvedAgent = workspace.agent;
+    let resolvedAgentId = 'default';
+    if (ctx.resolveAgent) {
+      const resolved = await ctx.resolveAgent(workspaceId, session, userText);
+      resolvedAgent = resolved.agent;
+      resolvedAgentId = resolved.agentId;
+    }
+
+    // 7. Get transcript and build full message list
     const transcript = await sessionMgr.getTranscript(session.id);
-    const fullMessages = await transcriptToMessages(transcript);
+    let fullMessages = await transcriptToMessages(transcript);
 
     // Get memory context
     const memProvider = ctx.getMemoryProvider(workspaceId);
@@ -309,89 +363,128 @@ export function createChatCompletionsApi(ctx: ChatCompletionsContext) {
       : [];
 
     const globalModels = ctx.getGlobalModels();
-    const toolCtx = ctx.getToolContext(workspaceId, session.id);
 
     // Resolve workspace-level model overrides
     const workspaceModels = ctx.getModelOverrideStore
       ? await ctx.getModelOverrideStore(workspaceId)?.getWorkspaceModels()
       : undefined;
 
-    // 7. Run agent
-    const agentRunner = ctx.createAgentRunner(workspaceId);
-    const runOptions: AgentRunOptions = {
-      messages: fullMessages,
-      workspaceId,
-      workspacePath: workspace.path,
-      agent: workspace.agent,
-      sessionId: session.id,
-      toolContext: toolCtx,
-      globalModels: {
-        fast: globalModels.fast,
-        slow: globalModels.slow,
-      },
-      workspaceModels,
-      memoryContext,
-      usageTracker: ctx.getUsageTracker(workspaceId),
-      agentName: workspace.agent.name,
-      channelType: 'api',
-      citationsEnabled: ctx.resolveCitations(workspaceId),
-      memoryBackend: memProvider?.backendName,
-    };
-
     const modelName = `scooby:${workspaceId}`;
 
+    // 8. Run agent (with re-run on agent switch for non-streaming)
     if (stream) {
+      const agentRunner = ctx.createAgentRunner(workspaceId);
+      const runOptions: AgentRunOptions = {
+        messages: fullMessages,
+        workspaceId,
+        workspacePath: workspace.path,
+        agent: resolvedAgent,
+        sessionId: session.id,
+        toolContext: ctx.getToolContext(workspaceId, session.id),
+        globalModels: { fast: globalModels.fast, slow: globalModels.slow },
+        workspaceModels,
+        memoryContext,
+        usageTracker: ctx.getUsageTracker(workspaceId),
+        agentName: resolvedAgent.name,
+        channelType: 'api',
+        citationsEnabled: ctx.resolveCitations(workspaceId),
+        memoryBackend: memProvider?.backendName,
+        availableAgents: ctx.getAvailableAgentsForPrompt?.(),
+      };
       return streamResponse(c, agentRunner, runOptions, completionId, created, modelName);
     } else {
-      return nonStreamResponse(c, agentRunner, runOptions, completionId, created, modelName);
+      let currentAgent = resolvedAgent;
+      let currentAgentId = resolvedAgentId;
+      let fullResponse = '';
+      let handoffNotice = '';
+      let promptTokens = 0;
+      let completionTokens = 0;
+
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const agentRunner = ctx.createAgentRunner(workspaceId);
+        fullResponse = '';
+        promptTokens = 0;
+        completionTokens = 0;
+
+        for await (const event of agentRunner.run({
+          messages: fullMessages,
+          workspaceId,
+          workspacePath: workspace.path,
+          agent: currentAgent,
+          sessionId: session.id,
+          toolContext: ctx.getToolContext(workspaceId, session.id),
+          globalModels: { fast: globalModels.fast, slow: globalModels.slow },
+          workspaceModels,
+          memoryContext,
+          usageTracker: ctx.getUsageTracker(workspaceId),
+          agentName: currentAgent.name,
+          channelType: 'api',
+          citationsEnabled: ctx.resolveCitations(workspaceId),
+          memoryBackend: memProvider?.backendName,
+          availableAgents: ctx.getAvailableAgentsForPrompt?.(),
+        })) {
+          if (event.type === 'text-delta') {
+            fullResponse += event.content;
+          } else if (event.type === 'done') {
+            fullResponse = event.response;
+            promptTokens = event.usage.promptTokens;
+            completionTokens = event.usage.completionTokens;
+          }
+        }
+
+        // Check if an agent switch happened
+        if (attempt === 0 && ctx.resolveAgent) {
+          const updatedSession = await sessionMgr.getSession('api', sessionKey);
+          if (updatedSession?.agentId && updatedSession.agentId !== currentAgentId) {
+            const resolved = await ctx.resolveAgent(workspaceId, updatedSession, '');
+            if (resolved.agentId !== currentAgentId) {
+              // Save handoff notice from old agent (strip reason unless debug)
+              const rawNotice = fullResponse || `Switching to ${resolved.agent.emoji ?? ''} ${resolved.agent.name}...`.trim();
+              handoffNotice = ctx.debug ? rawNotice : rawNotice.replace(/\s*Reason:.*$/, '');
+              currentAgent = resolved.agent;
+              currentAgentId = resolved.agentId;
+              // Refresh transcript for re-run
+              const freshTranscript = await sessionMgr.getTranscript(session.id);
+              fullMessages = await transcriptToMessages(freshTranscript);
+              continue;
+            }
+          }
+        }
+        break;
+      }
+
+      // Prepend handoff notice if agent was switched
+      if (handoffNotice && fullResponse) {
+        fullResponse = `${handoffNotice}\n\n${fullResponse}`;
+      } else if (handoffNotice && !fullResponse) {
+        fullResponse = handoffNotice;
+      }
+
+      // Debug signature
+      if (ctx.debug && fullResponse) {
+        fullResponse += `\n\n--- ${currentAgent.emoji ?? ''} ${currentAgent.name}`.trim();
+      }
+
+      return c.json({
+        id: completionId,
+        object: 'chat.completion',
+        created,
+        model: modelName,
+        choices: [{
+          index: 0,
+          message: { role: 'assistant', content: fullResponse },
+          finish_reason: 'stop',
+        }],
+        usage: {
+          prompt_tokens: promptTokens,
+          completion_tokens: completionTokens,
+          total_tokens: promptTokens + completionTokens,
+        },
+      });
     }
   });
 
   return app;
-}
-
-// ── Non-streaming ───────────────────────────────────────────────────
-
-async function nonStreamResponse(
-  c: any,
-  agentRunner: AgentRunner,
-  options: AgentRunOptions,
-  id: string,
-  created: number,
-  model: string,
-) {
-  let fullResponse = '';
-  let promptTokens = 0;
-  let completionTokens = 0;
-
-  for await (const event of agentRunner.run(options)) {
-    if (event.type === 'text-delta') {
-      fullResponse += event.content;
-    } else if (event.type === 'done') {
-      fullResponse = event.response;
-      promptTokens = event.usage.promptTokens;
-      completionTokens = event.usage.completionTokens;
-    }
-  }
-
-  return c.json({
-    id,
-    object: 'chat.completion',
-    created,
-    model,
-    choices: [
-      {
-        index: 0,
-        message: { role: 'assistant', content: fullResponse },
-        finish_reason: 'stop',
-      },
-    ],
-    usage: {
-      prompt_tokens: promptTokens,
-      completion_tokens: completionTokens,
-      total_tokens: promptTokens + completionTokens,
-    },
-  });
 }
 
 // ── Streaming ───────────────────────────────────────────────────────

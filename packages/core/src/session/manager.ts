@@ -147,6 +147,19 @@ export class SessionManager {
     return archivedIds;
   }
 
+  async setAgentId(sessionId: string, agentId: string): Promise<void> {
+    await this.metaStore.update((current) => {
+      const sessions = current ?? {};
+      for (const key of Object.keys(sessions)) {
+        if (sessions[key].id === sessionId) {
+          sessions[key].agentId = agentId;
+          break;
+        }
+      }
+      return sessions;
+    });
+  }
+
   async archiveSession(sessionId: string): Promise<void> {
     await this.metaStore.update((current) => {
       const sessions = current ?? {};

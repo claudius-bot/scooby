@@ -1,0 +1,10 @@
+{
+  "name": "Shaggy",
+  "id": "shaggy",
+  "emoji": "\uD83D\uDFE2",
+  "about": "Creative work: image generation, audio, art, storytelling, music, brainstorming",
+  "model": "fast",
+  "tools": ["image_gen", "tts", "audio_transcribe"],
+  "skills": [],
+  "universal": true
+}

@@ -21,10 +21,21 @@
     },
   },
 
+  agents: {
+    dir: './agents',
+  },
+
+  routing: {
+    model: 'anthropic/claude-haiku-4.5',
+  },
+
+  debug: true,
+
   workspaces: [
     {
       id: 'default',
       path: './workspaces/default',
+      defaultAgent: 'scooby',
       permissions: {
         sandbox: true,
       },

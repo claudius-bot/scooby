@@ -21,6 +21,11 @@ export interface OutboundMessage {
   attachments?: OutboundAttachment[];
 }
 
+export interface AgentRegistryRef {
+  get(id: string): import('../workspace/types.js').AgentProfile | undefined;
+  list(): import('../workspace/types.js').AgentProfile[];
+}
+
 export interface ToolContext {
   workspace: { id: string; path: string };
   session: { id: string; workspaceId: string };
@@ -34,6 +39,8 @@ export interface ToolContext {
   memoryProvider?: MemorySearchProvider;
   citationsEnabled?: boolean;
   cronScheduler?: WorkspaceCronScheduler;
+  agentRegistry?: AgentRegistryRef;
+  setSessionAgent?: (agentId: string) => Promise<void>;
 }
 
 export interface ScoobyToolDefinition<TInput extends z.ZodType = z.ZodType> {

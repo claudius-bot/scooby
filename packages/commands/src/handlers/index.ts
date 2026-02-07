@@ -11,3 +11,4 @@ export { createSwitchCommand } from './switch.js';
 export { createTtsCommand } from './tts.js';
 export { createImageCommand } from './image.js';
 export { createMemoryCommand } from './memory.js';
+export { createAgentCommand } from './agent.js';

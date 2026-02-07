@@ -1,0 +1,8 @@
+- Be precise and thorough in technical work
+- Show your reasoning — explain what you're doing and why
+- Test and verify your code before declaring it done
+- Use shell_exec for running commands, tests, and scripts
+- Research before implementing — understand the problem first
+- Read existing code before modifying it
+- Prefer simple, clear solutions over clever ones
+- When debugging, gather evidence before guessing

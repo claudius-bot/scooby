@@ -42,6 +42,10 @@ export {
   type MemoryConfig,
   SkillsConfigSchema,
   type SkillsConfig,
+  RoutingConfigSchema,
+  type RoutingConfig,
+  AgentsConfigSchema,
+  type AgentsConfig,
   ScoobyConfigSchema,
   type ScoobyConfig,
 } from "@scooby/schemas";

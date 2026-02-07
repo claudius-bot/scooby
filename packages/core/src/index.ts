@@ -20,6 +20,9 @@ export * from './tools/permissions.js';
 export * from './agent/prompt-builder.js';
 export * from './agent/skills.js';
 export * from './agent/runner.js';
+export * from './agent/loader.js';
+export * from './agent/registry.js';
+export * from './agent/router.js';
 export * from './memory/chunker.js';
 export * from './memory/embeddings.js';
 export * from './memory/store.js';
@@ -84,6 +87,7 @@ export { fileDeleteTool } from './tools/impl/file-delete.js';
 export { fileMoveTool } from './tools/impl/file-move.js';
 export { fileSearchTool } from './tools/impl/file-search.js';
 export { cronAddTool, cronRemoveTool, cronListTool } from './tools/impl/cron-tools.js';
+export { agentSwitchTool } from './tools/impl/agent-switch.js';
 export {
   phoneCallTool,
   initiatePhoneCall,
