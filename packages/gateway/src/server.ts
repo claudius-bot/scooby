@@ -5,7 +5,7 @@ import { Hono } from 'hono';
 import { serve, type ServerType } from '@hono/node-server';
 import { ConnectionManager } from './connections.js';
 import { createApi, type ApiContext } from './api.js';
-import { parseMessage, createResponse, createError, createEvent, type WsRequest } from './protocol.js';
+import { parseMessage, createResponse, createError, createEvent, SUBSCRIPTION_TOPICS, type WsRequest } from './protocol.js';
 
 export interface GatewayConfig {
   host: string;
@@ -40,6 +40,57 @@ export class GatewayServer {
     this.app.notFound((c) => {
       return c.json({ error: 'Not found' }, 404);
     });
+
+    // Register built-in subscribe/unsubscribe methods
+    this.registerMethod('subscribe', async (connectionId, params) => {
+      const topics = (params.topics as string[]) ?? [];
+      const workspaceId = params.workspaceId as string | undefined;
+
+      // Bind workspace if provided
+      if (workspaceId) {
+        this.connections.bindWorkspace(connectionId, workspaceId);
+      }
+
+      // Expand wildcards and subscribe
+      const expanded = this.expandTopics(topics);
+      for (const topic of expanded) {
+        this.connections.subscribe(connectionId, topic);
+      }
+
+      return { subscribed: expanded };
+    });
+
+    this.registerMethod('unsubscribe', async (connectionId, params) => {
+      const topics = (params.topics as string[]) ?? [];
+
+      const expanded = this.expandTopics(topics);
+      for (const topic of expanded) {
+        this.connections.unsubscribe(connectionId, topic);
+      }
+
+      return { unsubscribed: expanded };
+    });
+  }
+
+  /**
+   * Expand wildcard topic patterns (e.g. "session.*") into concrete topic names.
+   */
+  private expandTopics(topics: string[]): string[] {
+    const result: string[] = [];
+    for (const topic of topics) {
+      if (topic.includes('*')) {
+        // Wildcard: match against known topics
+        const prefix = topic.replace('*', '');
+        for (const known of SUBSCRIPTION_TOPICS) {
+          if (known.startsWith(prefix)) {
+            result.push(known);
+          }
+        }
+      } else {
+        result.push(topic);
+      }
+    }
+    return result;
   }
 
   private setupWebSocket(server: Server): void {
@@ -101,6 +152,10 @@ export class GatewayServer {
 
   broadcastEvent(workspaceId: string, event: string, data: unknown): void {
     this.connections.broadcast(workspaceId, createEvent(event, data));
+  }
+
+  broadcastToTopic(topic: string, data: unknown, workspaceId?: string): void {
+    this.connections.broadcastToTopic(topic, createEvent(topic, data), workspaceId);
   }
 
   getConnections(): ConnectionManager {

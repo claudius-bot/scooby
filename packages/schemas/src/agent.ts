@@ -30,3 +30,21 @@ export const AgentDefinitionSchema = z.object({
 });
 
 export type AgentDefinition = z.infer<typeof AgentDefinitionSchema>;
+
+/**
+ * Detailed agent info for API responses (extends AgentDefinition with runtime data).
+ */
+export const AgentDetailSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  emoji: z.string(),
+  avatar: z.string(),
+  about: z.string(),
+  model: z.string(),
+  fallbackModel: z.string().optional(),
+  tools: z.array(z.string()),
+  skills: z.array(z.string()),
+  universal: z.boolean(),
+});
+
+export type AgentDetail = z.infer<typeof AgentDetailSchema>;

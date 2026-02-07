@@ -1,6 +1,6 @@
-import { resolve, dirname, basename } from 'node:path';
+import { resolve, dirname, basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { copyFile, mkdir, unlink } from 'node:fs/promises';
+import { copyFile, mkdir, unlink, readdir, stat, readFile, writeFile } from 'node:fs/promises';
 import { config as loadEnv } from 'dotenv';
 import {
   loadConfig,
@@ -89,6 +89,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 loadEnv({ path: resolve(__dirname, '..', '..', '..', '.env') });
 
 async function main() {
+  const startTime = Date.now();
   console.log('[Scooby] Starting...');
 
   // 1. Load config
@@ -260,6 +261,9 @@ async function main() {
       summarizeSession(sid, wid, mgr).catch((err) => {
         console.error(`[Scooby] Summarization error:`, err);
       });
+
+      // Emit session.archived event
+      gateway.broadcastToTopic('session.archived', { workspaceId: wid, sessionId: sid }, wid);
 
       // QMD session export
       const provider = memoryProviders.get(wid);
@@ -643,7 +647,7 @@ async function main() {
 
   // 10. Gateway server
   const gatewayConfig = config.gateway ?? { host: '0.0.0.0', port: 3000 };
-  const gateway = new GatewayServer(
+  const gateway: GatewayServer = new GatewayServer(
     {
       host: gatewayConfig.host ?? '0.0.0.0',
       port: gatewayConfig.port ?? 3000,
@@ -746,6 +750,279 @@ async function main() {
         activeCallRegistry.delete(conversationId);
 
         console.log(`[Scooby] Phone call webhook: injected result for conversation ${conversationId}`);
+        return { ok: true };
+      },
+
+      // ── New read callbacks ────────────────────────────────────────────
+      listAgents: async () => {
+        return agentRegistry.listEntries().map(([id, a]) => ({
+          id,
+          name: a.name,
+          emoji: a.emoji,
+          avatar: a.avatar,
+          about: a.about ?? '',
+          model: a.modelRef ?? 'fast',
+          fallbackModel: a.fallbackModelRef,
+          tools: a.allowedTools ?? [],
+          skills: a.skillNames ?? [],
+          universal: a.universalTools !== false,
+        }));
+      },
+
+      getAgent: async (id: string) => {
+        const a = agentRegistry.get(id);
+        if (!a) return null;
+        return {
+          id: a.id ?? id,
+          name: a.name,
+          emoji: a.emoji,
+          avatar: a.avatar,
+          about: a.about ?? '',
+          model: a.modelRef ?? 'fast',
+          fallbackModel: a.fallbackModelRef,
+          tools: a.allowedTools ?? [],
+          skills: a.skillNames ?? [],
+          universal: a.universalTools !== false,
+        };
+      },
+
+      getWorkspaceDetail: async (id: string) => {
+        const ws = workspaces.get(id);
+        if (!ws) return null;
+        const wsConfig = config.workspaces.find(w => w.id === id);
+        const overrides = await modelOverrideStores.get(id)?.getWorkspaceModels();
+        return {
+          id: ws.id,
+          path: ws.path,
+          agent: {
+            name: ws.agent.name,
+            vibe: ws.agent.vibe,
+            emoji: ws.agent.emoji,
+            avatar: ws.agent.avatar,
+          },
+          defaultAgent: wsConfig?.defaultAgent ?? agentRegistry.getDefaultId(),
+          permissions: {
+            allowedTools: ws.permissions.allowedTools ? Array.from(ws.permissions.allowedTools) : null,
+            deniedTools: Array.from(ws.permissions.deniedTools),
+            sandbox: ws.permissions.sandbox,
+          },
+          heartbeat: ws.config.heartbeat ? {
+            enabled: ws.config.heartbeat.enabled ?? false,
+            intervalMinutes: ws.config.heartbeat.intervalMinutes,
+          } : undefined,
+          modelOverrides: overrides ?? undefined,
+        };
+      },
+
+      listWorkspaceFiles: async (workspaceId: string, subpath?: string) => {
+        const ws = workspaces.get(workspaceId);
+        if (!ws) return [];
+        const targetDir = subpath ? resolve(ws.path, subpath) : ws.path;
+        // Path traversal protection
+        if (!targetDir.startsWith(ws.path)) return [];
+        try {
+          const entries = await readdir(targetDir, { withFileTypes: true });
+          const result = [];
+          for (const entry of entries) {
+            const fullPath = join(targetDir, entry.name);
+            try {
+              const stats = await stat(fullPath);
+              result.push({
+                name: entry.name,
+                path: fullPath.slice(ws.path.length + 1),
+                type: entry.isDirectory() ? 'directory' : 'file',
+                size: stats.size,
+                modifiedAt: stats.mtime.toISOString(),
+              });
+            } catch {
+              // Skip files we can't stat
+            }
+          }
+          return result;
+        } catch {
+          return [];
+        }
+      },
+
+      readWorkspaceFile: async (workspaceId: string, filePath: string) => {
+        const ws = workspaces.get(workspaceId);
+        if (!ws) return null;
+        const fullPath = resolve(ws.path, filePath);
+        // Path traversal protection
+        if (!fullPath.startsWith(ws.path)) return null;
+        try {
+          const content = await readFile(fullPath, 'utf-8');
+          return { content, path: filePath };
+        } catch {
+          return null;
+        }
+      },
+
+      searchMemory: async (workspaceId: string, query: string, limit?: number) => {
+        const provider = memoryProviders.get(workspaceId);
+        if (!provider || !query) return [];
+        const results = await provider.search(workspaceId, query, limit);
+        return results.map(r => ({ source: r.source, content: r.content, score: r.score }));
+      },
+
+      listMemoryFiles: async (workspaceId: string) => {
+        const ws = workspaces.get(workspaceId);
+        if (!ws) return [];
+        const memoryDir = resolve(ws.path, 'memory');
+        try {
+          const entries = await readdir(memoryDir, { withFileTypes: true });
+          const result = [];
+          for (const entry of entries) {
+            if (!entry.isFile()) continue;
+            const fullPath = join(memoryDir, entry.name);
+            try {
+              const stats = await stat(fullPath);
+              result.push({
+                name: entry.name,
+                path: fullPath.slice(ws.path.length + 1),
+                size: stats.size,
+              });
+            } catch {
+              // Skip files we can't stat
+            }
+          }
+          return result;
+        } catch {
+          return [];
+        }
+      },
+
+      readMemoryFile: async (workspaceId: string, fileName: string) => {
+        const ws = workspaces.get(workspaceId);
+        if (!ws) return null;
+        const fullPath = resolve(ws.path, 'memory', fileName);
+        // Path traversal protection
+        if (!fullPath.startsWith(resolve(ws.path, 'memory'))) return null;
+        try {
+          return await readFile(fullPath, 'utf-8');
+        } catch {
+          return null;
+        }
+      },
+
+      listCronJobs: async (workspaceId: string) => {
+        const scheduler = cronSchedulers.get(workspaceId);
+        if (!scheduler) return [];
+        return scheduler.listJobs();
+      },
+
+      getCronHistory: async (workspaceId: string, limit?: number) => {
+        const scheduler = cronSchedulers.get(workspaceId);
+        if (!scheduler) return [];
+        return scheduler.getHistory(limit);
+      },
+
+      listTools: async () => {
+        return toolRegistry.list().map(t => ({
+          name: t.name,
+          description: t.description,
+          modelGroup: t.modelGroup,
+        }));
+      },
+
+      getSession: async (workspaceId: string, sessionId: string) => {
+        const mgr = sessionManagers.get(workspaceId);
+        if (!mgr) return null;
+        const sessions = await mgr.listSessions();
+        return sessions.find(s => s.id === sessionId) ?? null;
+      },
+
+      getSystemStatus: async () => {
+        let activeSessionCount = 0;
+        for (const mgr of sessionManagers.values()) {
+          const sessions = await mgr.listSessions();
+          activeSessionCount += sessions.filter(s => s.status === 'active').length;
+        }
+        return {
+          uptime: Date.now() - startTime,
+          activeConnections: gateway.getConnections().count,
+          workspaceCount: workspaces.size,
+          activeSessionCount,
+          channels: channelAdapters.map(a => a.type),
+          models: {
+            fast: config.models.fast.candidates.map(c => `${c.provider}/${c.model}`),
+            slow: config.models.slow.candidates.map(c => `${c.provider}/${c.model}`),
+          },
+        };
+      },
+
+      // ── New write callbacks ───────────────────────────────────────────
+      updateWorkspaceConfig: async (workspaceId: string, updates: Record<string, unknown>) => {
+        const ws = workspaces.get(workspaceId);
+        if (!ws) throw new Error(`Workspace not found: ${workspaceId}`);
+        // Apply simple config updates (model overrides)
+        const store = modelOverrideStores.get(workspaceId);
+        if (store && updates.models) {
+          const models = updates.models as Record<string, any>;
+          if (models.fast) await store.setGroup('fast', models.fast);
+          if (models.slow) await store.setGroup('slow', models.slow);
+        }
+        gateway.broadcastToTopic('workspace.updated', { workspaceId, changes: updates }, workspaceId);
+        return { ok: true };
+      },
+
+      writeWorkspaceFile: async (workspaceId: string, filePath: string, content: string) => {
+        const ws = workspaces.get(workspaceId);
+        if (!ws) throw new Error(`Workspace not found: ${workspaceId}`);
+        const fullPath = resolve(ws.path, filePath);
+        // Path traversal protection
+        if (!fullPath.startsWith(ws.path)) throw new Error('Path traversal not allowed');
+        await mkdir(dirname(fullPath), { recursive: true });
+        await writeFile(fullPath, content, 'utf-8');
+        return { ok: true };
+      },
+
+      writeMemory: async (workspaceId: string, source: string, content: string) => {
+        const provider = memoryProviders.get(workspaceId);
+        if (!provider) throw new Error('Memory not configured for workspace');
+        const chunks = await provider.index(workspaceId, source, content);
+        return { chunks: typeof chunks === 'number' ? chunks : 1 };
+      },
+
+      deleteMemory: async (workspaceId: string, sourcePrefix: string) => {
+        const provider = memoryProviders.get(workspaceId);
+        if (!provider) throw new Error('Memory not configured for workspace');
+        provider.deleteBySourcePrefix(workspaceId, sourcePrefix);
+        return { ok: true };
+      },
+
+      addCronJob: async (workspaceId: string, job: any) => {
+        const scheduler = cronSchedulers.get(workspaceId);
+        if (!scheduler) throw new Error('Cron not configured for workspace');
+        await scheduler.addJob({ ...job, source: 'agent' });
+        return { ok: true };
+      },
+
+      removeCronJob: async (workspaceId: string, jobId: string) => {
+        const scheduler = cronSchedulers.get(workspaceId);
+        if (!scheduler) throw new Error('Cron not configured for workspace');
+        const removed = await scheduler.removeJob(jobId);
+        if (!removed) throw new Error(`Job not found: ${jobId}`);
+        return { ok: true };
+      },
+
+      archiveSession: async (workspaceId: string, sessionId: string) => {
+        const mgr = sessionManagers.get(workspaceId);
+        if (!mgr) throw new Error('Session manager not found');
+        await mgr.archiveSession(sessionId);
+        gateway.broadcastToTopic('session.archived', { workspaceId, sessionId }, workspaceId);
+        return { ok: true };
+      },
+
+      setSessionAgent: async (workspaceId: string, sessionId: string, agentId: string) => {
+        const mgr = sessionManagers.get(workspaceId);
+        if (!mgr) throw new Error('Session manager not found');
+        await mgr.setAgentId(sessionId, agentId);
+        const agent = agentRegistry.get(agentId);
+        gateway.broadcastToTopic('session.agent-switched', {
+          workspaceId, sessionId, agentId,
+          agentName: agent?.name ?? agentId,
+        }, workspaceId);
         return { ok: true };
       },
     },
@@ -1465,6 +1742,13 @@ async function main() {
       }
 
       console.log(`[Cron] Job "${job.id}" completed for workspace ${workspaceId}`);
+
+      // Emit cron.executed event
+      gateway.broadcastToTopic('cron.executed', {
+        workspaceId, jobId: job.id, jobName: job.name ?? job.id,
+        status: 'success', response: response.slice(0, 500),
+      }, workspaceId);
+
       return { response, sessionId: session.id };
     });
 
@@ -1493,6 +1777,21 @@ async function main() {
         console.log(`[Heartbeat] Archived ${archived.length} idle sessions in workspace ${id}`);
       }
     }
+  });
+
+  heartbeat.registerTask('system-health-broadcast', async () => {
+    let activeSessionCount = 0;
+    for (const mgr of sessionManagers.values()) {
+      const sessions = await mgr.listSessions();
+      activeSessionCount += sessions.filter(s => s.status === 'active').length;
+    }
+    gateway.broadcastToTopic('system.health', {
+      uptime: Date.now() - startTime,
+      activeConnections: gateway.getConnections().count,
+      workspaceCount: workspaces.size,
+      activeSessionCount,
+      channels: channelAdapters.map(a => a.type),
+    });
   });
 
   // 13b. Per-workspace agent heartbeats
