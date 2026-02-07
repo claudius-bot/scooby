@@ -22,6 +22,7 @@ export interface ProcessMessageOptions {
     fast: ModelCandidate[];
     slow: ModelCandidate[];
   };
+  modelOverrideStore?: import('@scooby/core').ModelOverrideStore;
   sendReply: (text: string, format?: 'text' | 'markdown') => Promise<void>;
   sendAttachment?: (attachment: OutboundAttachment) => Promise<void>;
   getRunningAgent?: () => AbortController | null;
@@ -83,6 +84,7 @@ export class CommandProcessor {
       sessionManager: opts.sessionManager,
       config: opts.config,
       globalModels: opts.globalModels,
+      modelOverrideStore: opts.modelOverrideStore,
       sendReply: opts.sendReply,
       sendAttachment: opts.sendAttachment,
       getRunningAgent: opts.getRunningAgent,

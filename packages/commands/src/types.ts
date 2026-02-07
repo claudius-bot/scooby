@@ -44,6 +44,7 @@ export interface CommandContext {
     fast: ModelCandidate[];
     slow: ModelCandidate[];
   };
+  modelOverrideStore?: import('@scooby/core').ModelOverrideStore;
 
   // Functions
   sendReply: (text: string, format?: 'text' | 'markdown') => Promise<void>;

@@ -9,11 +9,14 @@ export function createStatusCommand(): CommandDefinition {
     description: 'Show session, workspace, and model info',
     usage: '/status',
     handler: async (_args: string, ctx: CommandContext): Promise<CommandResult> => {
-      const { workspace, session, globalModels } = ctx;
+      const { workspace, session, globalModels, modelOverrideStore } = ctx;
 
-      // Get current model info
-      const fastModel = globalModels.fast[0];
-      const slowModel = globalModels.slow[0];
+      // Get current model info with override awareness
+      const overrides = modelOverrideStore ? await modelOverrideStore.getWorkspaceModels() : undefined;
+      const fastModel = (overrides?.fast ?? globalModels.fast)[0];
+      const slowModel = (overrides?.slow ?? globalModels.slow)[0];
+      const fastSuffix = overrides?.fast ? ' (override)' : '';
+      const slowSuffix = overrides?.slow ? ' (override)' : '';
 
       const lines = [
         '**Status**',
@@ -30,8 +33,8 @@ export function createStatusCommand(): CommandDefinition {
         `**Last Active:** ${formatTime(session.lastActiveAt)}`,
         '',
         '**Models:**',
-        `  Fast: ${fastModel ? `${fastModel.provider}/${fastModel.model}` : 'none'}`,
-        `  Slow: ${slowModel ? `${slowModel.provider}/${slowModel.model}` : 'none'}`,
+        `  Fast: ${fastModel ? `${fastModel.provider}/${fastModel.model}${fastSuffix}` : 'none'}`,
+        `  Slow: ${slowModel ? `${slowModel.provider}/${slowModel.model}${slowSuffix}` : 'none'}`,
       ];
 
       const response = lines.join('\n');

@@ -33,6 +33,7 @@ export interface ChatCompletionsContext {
   getToolContext: (workspaceId: string, sessionId: string) => import('@scooby/core').ToolContext;
   getGlobalModels: () => { fast: import('@scooby/core').ModelCandidate[]; slow: import('@scooby/core').ModelCandidate[] };
   getUsageTracker: (workspaceId: string) => import('@scooby/core').UsageTracker | undefined;
+  getModelOverrideStore?: (workspaceId: string) => import('@scooby/core').ModelOverrideStore | undefined;
   resolveCitations: (workspaceId: string) => boolean;
   askChannelUser?: (params: {
     channelType: string;
@@ -310,6 +311,11 @@ export function createChatCompletionsApi(ctx: ChatCompletionsContext) {
     const globalModels = ctx.getGlobalModels();
     const toolCtx = ctx.getToolContext(workspaceId, session.id);
 
+    // Resolve workspace-level model overrides
+    const workspaceModels = ctx.getModelOverrideStore
+      ? await ctx.getModelOverrideStore(workspaceId)?.getWorkspaceModels()
+      : undefined;
+
     // 7. Run agent
     const agentRunner = ctx.createAgentRunner(workspaceId);
     const runOptions: AgentRunOptions = {
@@ -323,6 +329,7 @@ export function createChatCompletionsApi(ctx: ChatCompletionsContext) {
         fast: globalModels.fast,
         slow: globalModels.slow,
       },
+      workspaceModels,
       memoryContext,
       usageTracker: ctx.getUsageTracker(workspaceId),
       agentName: workspace.agent.name,

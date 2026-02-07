@@ -24,6 +24,7 @@ import {
   Heartbeat,
   WebhookManager,
   UsageTracker,
+  ModelOverrideStore,
   loadUsageSummary,
   transcriptToMessages,
   type TranscriptContentPart,
@@ -302,6 +303,17 @@ async function main() {
     usageTrackers.set(id, new UsageTracker(resolve(ws.path, 'data')));
   }
 
+  // 5d. Create model override stores per workspace
+  const modelOverrideStores = new Map<string, ModelOverrideStore>();
+  for (const [id, ws] of workspaces) {
+    modelOverrideStores.set(id, new ModelOverrideStore(resolve(ws.path, 'data')));
+  }
+
+  async function getWorkspaceModels(workspaceId: string) {
+    const store = modelOverrideStores.get(workspaceId);
+    return store ? await store.getWorkspaceModels() : undefined;
+  }
+
   // 6. Create tool registry
   const toolRegistry = new ToolRegistry();
   toolRegistry.register(shellExecTool);
@@ -361,6 +373,7 @@ async function main() {
       });
       sessionManagers.set(ws.id, mgr);
       usageTrackers.set(ws.id, new UsageTracker(resolve(ws.path, 'data')));
+      modelOverrideStores.set(ws.id, new ModelOverrideStore(resolve(ws.path, 'data')));
 
       console.log(`[Scooby] Dynamic workspace loaded: ${ws.id} (${ws.agent.name})`);
     } catch (err) {
@@ -381,6 +394,7 @@ async function main() {
     });
     sessionManagers.set(ws.id, mgr);
     usageTrackers.set(ws.id, new UsageTracker(resolve(ws.path, 'data')));
+    modelOverrideStores.set(ws.id, new ModelOverrideStore(resolve(ws.path, 'data')));
 
     mgr.onArchive((sid, wid) => {
       summarizeSession(sid, wid, mgr).catch((err) => {
@@ -625,6 +639,7 @@ async function main() {
         slow: config.models.slow.candidates,
       }),
       getUsageTracker: (id) => usageTrackers.get(id),
+      getModelOverrideStore: (id) => modelOverrideStores.get(id),
       resolveCitations: (workspaceId) => {
         const memProvider = memoryProviders.get(workspaceId);
         return resolveCitations(config.memory, memProvider?.backendName ?? 'builtin');
@@ -665,6 +680,7 @@ async function main() {
         fast: config.models.fast.candidates,
         slow: config.models.slow.candidates,
       },
+      modelOverrideStore: modelOverrideStores.get(workspaceId),
       sendReply: async (replyText: string, format?: 'text' | 'markdown') => {
         gateway.sendEvent(connectionId, 'chat.done', {
           type: 'done',
@@ -785,6 +801,7 @@ async function main() {
         fast: config.models.fast.candidates,
         slow: config.models.slow.candidates,
       },
+      workspaceModels: await getWorkspaceModels(workspaceId),
       memoryContext,
       usageTracker: usageTrackers.get(workspaceId),
       agentName: ws.agent.name,
@@ -935,6 +952,7 @@ async function main() {
         fast: config.models.fast.candidates,
         slow: config.models.slow.candidates,
       },
+      modelOverrideStore: modelOverrideStores.get(workspaceId),
       sendReply: async (replyText: string, format?: 'text' | 'markdown') => {
         if (adapter) {
           const prepared = prepareOutboundText(replyText, format ?? 'markdown', adapter.outputFormat);
@@ -1148,6 +1166,7 @@ async function main() {
         fast: config.models.fast.candidates,
         slow: config.models.slow.candidates,
       },
+      workspaceModels: await getWorkspaceModels(workspaceId),
       memoryContext,
       usageTracker: usageTrackers.get(workspaceId),
       agentName: ws.agent.name,
@@ -1213,6 +1232,7 @@ async function main() {
         fast: config.models.fast.candidates,
         slow: config.models.slow.candidates,
       },
+      workspaceModels: await getWorkspaceModels(job.workspace),
       usageTracker: usageTrackers.get(job.workspace),
       agentName: ws.agent.name,
       channelType: 'cron',
@@ -1277,6 +1297,7 @@ async function main() {
         fast: config.models.fast.candidates,
         slow: config.models.slow.candidates,
       },
+      workspaceModels: await getWorkspaceModels(workspaceId),
       usageTracker: usageTrackers.get(workspaceId),
       agentName: ws.agent.name,
       channelType: 'webhook',
