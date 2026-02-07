@@ -1,0 +1,10 @@
+{
+  "name": "Daphne",
+  "id": "daphne",
+  "emoji": "\uD83D\uDFE3",
+  "about": "Communication, phone calls, messaging, text-to-speech, social interactions",
+  "model": "fast",
+  "tools": ["phone_call", "tts"],
+  "skills": [],
+  "universal": true
+}

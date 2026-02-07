@@ -9,6 +9,7 @@ export interface PromptContext {
   workspacePath: string;
   citationsEnabled?: boolean;
   memoryBackend?: string;
+  availableAgents?: Array<{ id: string; name: string; emoji: string; about: string }>;
 }
 
 export interface SkillDefinition {
@@ -119,7 +120,21 @@ Remove items when no longer relevant.
 ${ctx.agent.scratchpad}`);
   }
 
-  // 8. Context
+  // 8. Agent switching context
+  if (ctx.availableAgents && ctx.availableAgents.length > 1) {
+    const agentLines = ctx.availableAgents
+      .map(a => `- ${a.emoji} **${a.name}** (\`${a.id}\`): ${a.about}`)
+      .join('\n');
+    parts.push(`# Agent Team
+
+You are ${ctx.agent.emoji} ${ctx.agent.name}. You are part of a team of agents:
+
+${agentLines}
+
+If a request is clearly outside your expertise and better suited for another agent, use the \`agent_switch\` tool to hand off the conversation. The switch takes effect on the next message.`);
+  }
+
+  // 9. Context
   parts.push(`# Context\n\nCurrent time: ${ctx.timestamp.toISOString()}\nWorkspace: ${ctx.workspaceId}\nWorkspace path: ${ctx.workspacePath}`);
 
   return parts.join('\n\n---\n\n');

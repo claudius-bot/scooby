@@ -7,6 +7,7 @@ export interface SessionMetadata {
   lastActiveAt: string;       // ISO 8601
   messageCount: number;
   status: 'active' | 'idle' | 'archived';
+  agentId?: string;
 }
 
 export type TranscriptContentPart =

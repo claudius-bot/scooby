@@ -58,6 +58,11 @@ import {
   cronAddTool,
   cronRemoveTool,
   cronListTool,
+  agentSwitchTool,
+  loadAgentDefinitions,
+  AgentRegistry,
+  AgentRouter,
+  type AgentProfile,
 } from '@scooby/core';
 import {
   TelegramAdapter,
@@ -89,6 +94,7 @@ async function main() {
   // 1. Load config
   const configPath = resolve(__dirname, '..', '..', '..', 'scooby.config.json5');
   const config = await loadConfig(configPath);
+  const configDir = dirname(configPath);
   console.log(`[Scooby] Config loaded from ${configPath}`);
 
   // 1b. Configure AI Gateway if present
@@ -97,13 +103,31 @@ async function main() {
     console.log('[Scooby] AI Gateway configured');
   }
 
+  // 1c. Load standalone agents
+  const agentsDir = resolve(configDir, config.agents?.dir ?? './agents');
+  const agentProfiles = await loadAgentDefinitions(agentsDir);
+  const agentRegistry = new AgentRegistry(agentProfiles);
+  console.log(`[Scooby] Loaded ${agentProfiles.size} agents: ${Array.from(agentProfiles.keys()).join(', ')}`);
+
+  // 1d. Create agent router
+  const agentRouter = new AgentRouter(
+    agentRegistry,
+    config.models.fast.candidates,
+    config.routing,
+  );
+
   // 2. Load workspaces
   const workspaces = new Map<string, Workspace>();
-  const configDir = dirname(configPath);
   for (const wsConfig of config.workspaces) {
     const ws = await loadWorkspace(wsConfig, configDir);
+    // Set workspace's default agent from registry
+    const defaultAgentId = wsConfig.defaultAgent ?? agentRegistry.getDefaultId();
+    const defaultAgent = agentRegistry.get(defaultAgentId);
+    if (defaultAgent) {
+      ws.agent = { ...defaultAgent, scratchpad: ws.agent.scratchpad, heartbeatChecklist: ws.agent.heartbeatChecklist };
+    }
     workspaces.set(ws.id, ws);
-    console.log(`[Scooby] Workspace loaded: ${ws.id} (${ws.agent.name})`);
+    console.log(`[Scooby] Workspace loaded: ${ws.id} (default agent: ${ws.agent.name})`);
   }
 
   // 3. Initialize provider cooldowns
@@ -253,6 +277,7 @@ async function main() {
     workspaceId: string,
     sessionId: string,
     sessionMgr: SessionManager,
+    agent: AgentProfile,
   ) => {
     const ws = workspaces.get(workspaceId);
     const memService = memoryServices.get(workspaceId);
@@ -267,6 +292,7 @@ async function main() {
       memoryProvider: memoryProviders.get(workspaceId),
       citationsEnabled: resolveCitations(config.memory, memoryProviders.get(workspaceId)?.backendName ?? 'builtin'),
       cronScheduler: cronSchedulers.get(workspaceId),
+      agentRegistry,
     };
 
     const transcript = await sessionMgr.getTranscript(sessionId);
@@ -284,7 +310,7 @@ async function main() {
       messages,
       workspaceId,
       workspacePath: ws.path,
-      agent: ws.agent,
+      agent,
       sessionId,
       toolContext: flushToolCtx,
       globalModels: {
@@ -292,7 +318,7 @@ async function main() {
         slow: config.models.slow.candidates,
       },
       usageTracker: usageTrackers.get(workspaceId),
-      agentName: ws.agent.name,
+      agentName: agent.name,
       channelType: 'system',
     })) {
       // Consume silently
@@ -345,6 +371,7 @@ async function main() {
   toolRegistry.register(cronAddTool);
   toolRegistry.register(cronRemoveTool);
   toolRegistry.register(cronListTool);
+  toolRegistry.register(agentSwitchTool);
 
   // 6b. Create command processor, code manager, and workspace management
   const commandRegistry = createDefaultRegistry();
@@ -370,6 +397,11 @@ async function main() {
 
     try {
       const ws = await loadWorkspace({ id: info.id, path: info.path }, configDir);
+      // Set default agent
+      const defaultAgent = agentRegistry.getDefault();
+      if (defaultAgent) {
+        ws.agent = { ...defaultAgent, scratchpad: ws.agent.scratchpad, heartbeatChecklist: ws.agent.heartbeatChecklist };
+      }
       workspaces.set(ws.id, ws);
 
       // Create session manager and usage tracker for this workspace
@@ -392,6 +424,11 @@ async function main() {
   // Helper to initialize a newly created workspace
   const initializeWorkspace = async (workspaceId: string, workspacePath: string) => {
     const ws = await loadWorkspace({ id: workspaceId, path: workspacePath }, configDir);
+    // Set default agent
+    const defaultAgent = agentRegistry.getDefault();
+    if (defaultAgent) {
+      ws.agent = { ...defaultAgent, scratchpad: ws.agent.scratchpad, heartbeatChecklist: ws.agent.heartbeatChecklist };
+    }
     workspaces.set(ws.id, ws);
 
     const mgr = new SessionManager({
@@ -427,6 +464,110 @@ async function main() {
   };
 
   console.log('[Scooby] Command processor initialized');
+
+  // ── Agent resolution helper ───────────────────────────────────────
+  /**
+   * Resolve which agent should handle a message for a given session.
+   * Priority: session.agentId > emoji detection > workspace default > router > fallback
+   */
+  async function resolveAgent(
+    session: import('@scooby/core').SessionMetadata,
+    userMessage: string,
+    wsConfig: typeof config.workspaces[0],
+    sessionMgr: SessionManager,
+  ): Promise<{ agent: AgentProfile; agentId: string; isNew: boolean }> {
+    // 1. Session already has an agent assigned
+    if (session.agentId && agentRegistry.has(session.agentId)) {
+      return { agent: agentRegistry.get(session.agentId)!, agentId: session.agentId, isNew: false };
+    }
+
+    // 2. Emoji detection in user message
+    const emojiMatch = agentRegistry.matchEmoji(userMessage);
+    if (emojiMatch) {
+      await sessionMgr.setAgentId(session.id, emojiMatch);
+      return { agent: agentRegistry.get(emojiMatch)!, agentId: emojiMatch, isNew: true };
+    }
+
+    // 3. Workspace default agent
+    if (wsConfig.defaultAgent && agentRegistry.has(wsConfig.defaultAgent)) {
+      // Don't route, use workspace default — but only if no routing configured
+      if (!config.routing) {
+        await sessionMgr.setAgentId(session.id, wsConfig.defaultAgent);
+        return { agent: agentRegistry.get(wsConfig.defaultAgent)!, agentId: wsConfig.defaultAgent, isNew: true };
+      }
+    }
+
+    // 4. Router model selects agent
+    try {
+      const routedId = await agentRouter.route(userMessage);
+      await sessionMgr.setAgentId(session.id, routedId);
+      return { agent: agentRegistry.get(routedId)!, agentId: routedId, isNew: true };
+    } catch (err) {
+      console.error('[Scooby] Agent routing failed:', err);
+    }
+
+    // 5. Fallback to default
+    const defaultId = agentRegistry.getDefaultId();
+    await sessionMgr.setAgentId(session.id, defaultId);
+    return { agent: agentRegistry.getDefault(), agentId: defaultId, isNew: true };
+  }
+
+  // Helper to build available agents list for prompt builder
+  function getAvailableAgentsForPrompt() {
+    return agentRegistry.listEntries().map(([id, a]) => ({
+      id,
+      name: a.name,
+      emoji: a.emoji,
+      about: a.about ?? '',
+    }));
+  }
+
+  // Helper to build a setSessionAgent callback
+  function makeSetSessionAgent(sessionId: string, workspaceId: string) {
+    return async (agentId: string) => {
+      const sessionMgr = sessionManagers.get(workspaceId);
+      if (sessionMgr) {
+        await sessionMgr.setAgentId(sessionId, agentId);
+      }
+    };
+  }
+
+  // Helper to build agent-aware ToolContext
+  function buildToolContext(
+    ws: Workspace,
+    sessionId: string,
+    workspaceId: string,
+    channelType?: string,
+    conversationId?: string,
+  ): ToolContext {
+    const memProvider = memoryProviders.get(workspaceId);
+    return {
+      workspace: { id: ws.id, path: ws.path },
+      session: { id: sessionId, workspaceId },
+      permissions: ws.permissions,
+      conversation: channelType && conversationId ? { channelType, conversationId } : undefined,
+      sendMessage,
+      memoryService: memoryServices.get(workspaceId),
+      memoryProvider: memProvider,
+      citationsEnabled: resolveCitations(config.memory, memProvider?.backendName ?? 'builtin'),
+      cronScheduler: cronSchedulers.get(workspaceId),
+      agentRegistry,
+      setSessionAgent: makeSetSessionAgent(sessionId, workspaceId),
+    };
+  }
+
+  // Helper to build command context with agent fields
+  function buildCommandAgentFields(sessionId: string, workspaceId: string, currentAgentId?: string) {
+    return {
+      agentRegistry: {
+        get: (id: string) => agentRegistry.get(id),
+        list: () => agentRegistry.list(),
+        findByName: (name: string) => agentRegistry.findByName(name),
+      },
+      setSessionAgent: makeSetSessionAgent(sessionId, workspaceId),
+      currentAgentId,
+    };
+  }
 
   // 7. Channel adapters
   const channelAdapters: ChannelAdapter[] = [];
@@ -464,8 +605,6 @@ async function main() {
   };
 
   // 9b. Pending clarification system for Daphne voice agent
-  // When Daphne (on a phone call) needs user input, she sends a message to the
-  // user's channel and waits for a reply. This map tracks those pending requests.
   const pendingClarifications = new Map<string, {
     resolve: (response: string) => void;
     timeout: ReturnType<typeof setTimeout>;
@@ -546,8 +685,6 @@ async function main() {
         return loadUsageSummary(resolve(ws.path, 'data'), { days });
       },
       handlePhoneCallWebhook: async (body: any) => {
-        // ElevenLabs wraps post-call webhooks in { type, data, event_timestamp }.
-        // Unwrap the envelope to get the conversation data.
         const eventType = body.type;
         const payload = body.data ?? body;
 
@@ -630,18 +767,7 @@ async function main() {
       createAgentRunner: (_id) => new AgentRunner(toolRegistry, cooldowns, sessionManagers.get(_id)!),
       getToolContext: (workspaceId, sessionId) => {
         const ws = workspaces.get(workspaceId)!;
-        const memProvider = memoryProviders.get(workspaceId);
-        return {
-          workspace: { id: ws.id, path: ws.path },
-          session: { id: sessionId, workspaceId },
-          permissions: ws.permissions,
-          conversation: { channelType: 'api', conversationId: sessionId },
-          sendMessage,
-          memoryService: memoryServices.get(workspaceId),
-          memoryProvider: memProvider,
-          citationsEnabled: resolveCitations(config.memory, memProvider?.backendName ?? 'builtin'),
-          cronScheduler: cronSchedulers.get(workspaceId),
-        };
+        return buildToolContext(ws, sessionId, workspaceId, 'api', sessionId);
       },
       getGlobalModels: () => ({
         fast: config.models.fast.candidates,
@@ -671,6 +797,10 @@ async function main() {
     // Bind connection to workspace
     gateway.getConnections().bindWorkspace(connectionId, workspaceId, session.id);
 
+    // Resolve agent for this session
+    const wsConfig = config.workspaces.find(w => w.id === workspaceId) ?? config.workspaces[0];
+    const { agent: resolvedAgent, agentId } = await resolveAgent(session, text, wsConfig, sessionMgr);
+
     // Try to handle as a slash command
     const cmdResult = await commandProcessor.tryHandle({
       message: {
@@ -690,6 +820,7 @@ async function main() {
         slow: config.models.slow.candidates,
       },
       modelOverrideStore: modelOverrideStores.get(workspaceId),
+      ...buildCommandAgentFields(session.id, workspaceId, agentId),
       sendReply: async (replyText: string, format?: 'text' | 'markdown') => {
         gateway.sendEvent(connectionId, 'chat.done', {
           type: 'done',
@@ -743,8 +874,6 @@ async function main() {
         return result;
       },
       switchWorkspace: async (codeOrId: string): Promise<boolean> => {
-        // WebChat doesn't use router bindings the same way
-        // For now, just validate and return success
         if (/^\d{6}$/.test(codeOrId)) {
           const targetWorkspaceId = codeManager.validate(codeOrId);
           if (!targetWorkspaceId) return false;
@@ -764,7 +893,7 @@ async function main() {
       (memoryServices.has(workspaceId) || memoryProviders.has(workspaceId)) &&
       sessionMgr.shouldFlush(session.id, session.messageCount)
     ) {
-      await performMemoryFlush(workspaceId, session.id, sessionMgr);
+      await performMemoryFlush(workspaceId, session.id, sessionMgr, resolvedAgent);
     }
 
     // Record user message
@@ -784,27 +913,14 @@ async function main() {
     const memoryContext = memProvider && text
       ? await memProvider.getContextForPrompt(workspaceId, text) : [];
 
-    const toolCtx: ToolContext = {
-      workspace: { id: ws.id, path: ws.path },
-      session: { id: session.id, workspaceId },
-      permissions: ws.permissions,
-      conversation: {
-        channelType: 'webchat',
-        conversationId: connectionId,
-      },
-      sendMessage,
-      memoryService: memoryServices.get(workspaceId),
-      memoryProvider: memProvider,
-      citationsEnabled: resolveCitations(config.memory, memProvider?.backendName ?? 'builtin'),
-      cronScheduler: cronSchedulers.get(workspaceId),
-    };
+    const toolCtx = buildToolContext(ws, session.id, workspaceId, 'webchat', connectionId);
 
     // Stream response back via WebSocket
     const stream = agentRunner.run({
       messages,
       workspaceId,
       workspacePath: ws.path,
-      agent: ws.agent,
+      agent: resolvedAgent,
       sessionId: session.id,
       toolContext: toolCtx,
       globalModels: {
@@ -814,16 +930,27 @@ async function main() {
       workspaceModels: await getWorkspaceModels(workspaceId),
       memoryContext,
       usageTracker: usageTrackers.get(workspaceId),
-      agentName: ws.agent.name,
+      agentName: resolvedAgent.name,
       channelType: 'webchat',
+      availableAgents: getAvailableAgentsForPrompt(),
       citationsEnabled: resolveCitations(config.memory, memProvider?.backendName ?? 'builtin'),
       memoryBackend: memProvider?.backendName,
     });
 
     // Process stream events and forward to WebSocket
     (async () => {
+      let fullResponse = '';
       for await (const event of stream) {
         gateway.sendEvent(connectionId, `chat.${event.type}`, event);
+        if (event.type === 'done') {
+          fullResponse = event.response;
+        }
+      }
+      // Debug signature
+      if (config.debug && fullResponse) {
+        gateway.sendEvent(connectionId, 'chat.debug', {
+          agent: `${resolvedAgent.emoji} ${resolvedAgent.name}`,
+        });
       }
     })().catch((err) => {
       console.error(`[Scooby] Stream error for connection ${connectionId}:`, err);
@@ -951,6 +1078,10 @@ async function main() {
     const sessionMgr = sessionManagers.get(workspaceId)!;
     const session = await sessionMgr.getOrCreate(msg.channelType, msg.conversationId);
 
+    // Resolve agent for this session
+    const wsConfig = config.workspaces.find(w => w.id === workspaceId) ?? config.workspaces[0];
+    const { agent: resolvedAgent, agentId } = await resolveAgent(session, msg.text, wsConfig, sessionMgr);
+
     // Try to handle as a slash command
     const cmdResult = await commandProcessor.tryHandle({
       message: msg,
@@ -963,6 +1094,7 @@ async function main() {
         slow: config.models.slow.candidates,
       },
       modelOverrideStore: modelOverrideStores.get(workspaceId),
+      ...buildCommandAgentFields(session.id, workspaceId, agentId),
       sendReply: async (replyText: string, format?: 'text' | 'markdown') => {
         if (adapter) {
           const prepared = prepareOutboundText(replyText, format ?? 'markdown', adapter.outputFormat);
@@ -1058,7 +1190,7 @@ async function main() {
       (memoryServices.has(workspaceId) || memoryProviders.has(workspaceId)) &&
       sessionMgr.shouldFlush(session.id, session.messageCount)
     ) {
-      await performMemoryFlush(workspaceId, session.id, sessionMgr);
+      await performMemoryFlush(workspaceId, session.id, sessionMgr, resolvedAgent);
     }
 
     // Process voice/audio attachments
@@ -1148,21 +1280,7 @@ async function main() {
         ? await memProviderForChannel.getContextForPrompt(workspaceId, msg.text) : [];
     }
 
-    const toolCtx: ToolContext = {
-      workspace: { id: ws.id, path: ws.path },
-      session: { id: session.id, workspaceId },
-      permissions: ws.permissions,
-      conversation: {
-        channelType: msg.channelType,
-        conversationId: msg.conversationId,
-      },
-      sendMessage,
-      memoryService: memoryServices.get(workspaceId),
-      memoryProvider: memProviderForChannel,
-      citationsEnabled: resolveCitations(config.memory, memProviderForChannel?.backendName ?? 'builtin'),
-      cronScheduler: cronSchedulers.get(workspaceId),
-    };
-
+    const toolCtx = buildToolContext(ws, session.id, workspaceId, msg.channelType, msg.conversationId);
     const agentRunner = new AgentRunner(toolRegistry, cooldowns, sessionMgr);
 
     let fullResponse = '';
@@ -1170,7 +1288,7 @@ async function main() {
       messages,
       workspaceId,
       workspacePath: ws.path,
-      agent: ws.agent,
+      agent: resolvedAgent,
       sessionId: session.id,
       toolContext: toolCtx,
       globalModels: {
@@ -1180,10 +1298,11 @@ async function main() {
       workspaceModels: await getWorkspaceModels(workspaceId),
       memoryContext,
       usageTracker: usageTrackers.get(workspaceId),
-      agentName: ws.agent.name,
+      agentName: resolvedAgent.name,
       channelType: msg.channelType,
       citationsEnabled: resolveCitations(config.memory, memProviderForChannel?.backendName ?? 'builtin'),
       memoryBackend: memProviderForChannel?.backendName,
+      availableAgents: getAvailableAgentsForPrompt(),
     })) {
       if (event.type === 'done') {
         fullResponse = event.response;
@@ -1192,6 +1311,11 @@ async function main() {
 
     // Send response back through channel
     if (fullResponse) {
+      // Debug signature
+      if (config.debug) {
+        fullResponse += `\n\n--- ${resolvedAgent.emoji} ${resolvedAgent.name}`;
+      }
+
       const adapter = channelAdapters.find((a) => a.type === msg.channelType);
       if (adapter) {
         const prepared = prepareOutboundText(fullResponse, 'markdown', adapter.outputFormat);
@@ -1224,17 +1348,10 @@ async function main() {
       const sessionMgr = sessionManagers.get(workspaceId)!;
       const session = await sessionMgr.getOrCreate('cron', `cron:${job.id}`);
 
-      const cronMemProvider = memoryProviders.get(workspaceId);
-      const toolCtx: ToolContext = {
-        workspace: { id: wsForJob.id, path: wsForJob.path },
-        session: { id: session.id, workspaceId },
-        permissions: wsForJob.permissions,
-        sendMessage,
-        memoryService: memoryServices.get(workspaceId),
-        memoryProvider: cronMemProvider,
-        citationsEnabled: resolveCitations(config.memory, cronMemProvider?.backendName ?? 'builtin'),
-        cronScheduler: scheduler,
-      };
+      // Use workspace default agent for cron jobs
+      const cronAgent = wsForJob.agent;
+
+      const toolCtx = buildToolContext(wsForJob, session.id, workspaceId);
 
       const agentRunner = new AgentRunner(toolRegistry, cooldowns, sessionMgr);
       let response = '';
@@ -1242,7 +1359,7 @@ async function main() {
         messages: [{ role: 'user', content: job.prompt }],
         workspaceId,
         workspacePath: wsForJob.path,
-        agent: wsForJob.agent,
+        agent: cronAgent,
         sessionId: session.id,
         toolContext: toolCtx,
         globalModels: {
@@ -1251,10 +1368,10 @@ async function main() {
         },
         workspaceModels: await getWorkspaceModels(workspaceId),
         usageTracker: usageTrackers.get(workspaceId),
-        agentName: wsForJob.agent.name,
+        agentName: cronAgent.name,
         channelType: 'cron',
-        citationsEnabled: resolveCitations(config.memory, cronMemProvider?.backendName ?? 'builtin'),
-        memoryBackend: cronMemProvider?.backendName,
+        citationsEnabled: resolveCitations(config.memory, memoryProviders.get(workspaceId)?.backendName ?? 'builtin'),
+        memoryBackend: memoryProviders.get(workspaceId)?.backendName,
       })) {
         if (event.type === 'done') {
           response = event.response;
@@ -1314,18 +1431,8 @@ async function main() {
       runAgent: async (prompt) => {
         const sessionMgr = sessionManagers.get(id)!;
         const session = await sessionMgr.getOrCreate('heartbeat', `heartbeat:${id}`);
-        const hbMemProvider = memoryProviders.get(id);
 
-        const toolCtx: ToolContext = {
-          workspace: { id: ws.id, path: ws.path },
-          session: { id: session.id, workspaceId: id },
-          permissions: ws.permissions,
-          sendMessage,
-          memoryService: memoryServices.get(id),
-          memoryProvider: hbMemProvider,
-          citationsEnabled: resolveCitations(config.memory, hbMemProvider?.backendName ?? 'builtin'),
-          cronScheduler: cronSchedulers.get(id),
-        };
+        const toolCtx = buildToolContext(ws, session.id, id);
 
         const agentRunner = new AgentRunner(toolRegistry, cooldowns, sessionMgr);
         let response = '';
@@ -1374,17 +1481,7 @@ async function main() {
     const sessionMgr = sessionManagers.get(workspaceId)!;
     const session = await sessionMgr.getOrCreate('webhook', `webhook:${Date.now()}`);
 
-    const webhookMemProvider = memoryProviders.get(workspaceId);
-    const toolCtx: ToolContext = {
-      workspace: { id: ws.id, path: ws.path },
-      session: { id: session.id, workspaceId },
-      permissions: ws.permissions,
-      sendMessage,
-      memoryService: memoryServices.get(workspaceId),
-      memoryProvider: webhookMemProvider,
-      citationsEnabled: resolveCitations(config.memory, webhookMemProvider?.backendName ?? 'builtin'),
-      cronScheduler: cronSchedulers.get(workspaceId),
-    };
+    const toolCtx = buildToolContext(ws, session.id, workspaceId);
 
     const agentRunner = new AgentRunner(toolRegistry, cooldowns, sessionMgr);
     let response = '';
@@ -1403,8 +1500,8 @@ async function main() {
       usageTracker: usageTrackers.get(workspaceId),
       agentName: ws.agent.name,
       channelType: 'webhook',
-      citationsEnabled: resolveCitations(config.memory, webhookMemProvider?.backendName ?? 'builtin'),
-      memoryBackend: webhookMemProvider?.backendName,
+      citationsEnabled: resolveCitations(config.memory, memoryProviders.get(workspaceId)?.backendName ?? 'builtin'),
+      memoryBackend: memoryProviders.get(workspaceId)?.backendName,
     })) {
       if (event.type === 'done') {
         response = event.response;

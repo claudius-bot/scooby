@@ -55,6 +55,15 @@ export interface CommandContext {
   getSkills?: () => Promise<SkillDefinition[]>;
   generateWorkspaceCode?: () => string;
 
+  // Agent system
+  agentRegistry?: {
+    get(id: string): import('@scooby/core').AgentProfile | undefined;
+    list(): import('@scooby/core').AgentProfile[];
+    findByName(name: string): [string, import('@scooby/core').AgentProfile] | undefined;
+  };
+  setSessionAgent?: (agentId: string) => Promise<void>;
+  currentAgentId?: string;
+
   // Memory
   searchMemory?: (query: string) => Promise<Array<{ source: string; content: string; score: number }>>;
   addMemory?: (text: string) => Promise<number>;

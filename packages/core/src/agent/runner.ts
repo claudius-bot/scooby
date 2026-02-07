@@ -53,6 +53,7 @@ export interface AgentRunOptions {
   channelType?: string;
   citationsEnabled?: boolean;
   memoryBackend?: string;
+  availableAgents?: Array<{ id: string; name: string; emoji: string; about: string }>;
 }
 
 const providerEnvKeys: Record<string, string> = {
@@ -96,15 +97,23 @@ export class AgentRunner {
       workspacePath: options.workspacePath,
       citationsEnabled: options.citationsEnabled,
       memoryBackend: options.memoryBackend,
+      availableAgents: options.availableAgents,
     };
     const systemPrompt = buildSystemPrompt(promptCtx);
 
-    // Get AI SDK tools filtered by permissions
-    const aiTools = this.toolRegistry.toAiSdkTools(options.toolContext);
+    // Get AI SDK tools filtered by permissions (and agent tool list if defined)
+    const aiTools = options.agent.allowedTools
+      ? this.toolRegistry.toAiSdkToolsForAgent(options.toolContext, options.agent)
+      : this.toolRegistry.toAiSdkTools(options.toolContext);
 
     // Escalation state
     let escState = createEscalationState();
+
+    // Determine initial model group from agent's modelRef
     let currentGroup: ModelGroup = 'fast';
+    if (options.agent.modelRef === 'slow') {
+      currentGroup = 'slow';
+    }
 
     // Check if any tool in the conversation requires slow model
     const slowTools = this.toolRegistry.getToolsRequestingGroup('slow');
@@ -116,8 +125,36 @@ export class AgentRunner {
       return selector.select(group, globalCandidates, workspaceCandidates);
     };
 
-    // Select initial model
-    let selection = selectModel(currentGroup);
+    // Try agent-specific model (provider/model format) before group selection
+    let selection: ModelSelection | null = null;
+    if (options.agent.modelRef && options.agent.modelRef !== 'fast' && options.agent.modelRef !== 'slow') {
+      const parts = options.agent.modelRef.split('/');
+      if (parts.length === 2) {
+        const [provider, model] = parts;
+        const agentModel = getLanguageModel(provider, model);
+        if (agentModel && this.cooldowns.isAvailable(provider, model)) {
+          selection = { model: agentModel, candidate: { provider, model }, group: currentGroup };
+        }
+      }
+    }
+
+    // Try fallback model if primary didn't resolve
+    if (!selection && options.agent.fallbackModelRef) {
+      const parts = options.agent.fallbackModelRef.split('/');
+      if (parts.length === 2) {
+        const [provider, model] = parts;
+        const fallbackModel = getLanguageModel(provider, model);
+        if (fallbackModel && this.cooldowns.isAvailable(provider, model)) {
+          selection = { model: fallbackModel, candidate: { provider, model }, group: currentGroup };
+        }
+      }
+    }
+
+    // Fall through to standard group selection
+    if (!selection) {
+      selection = selectModel(currentGroup);
+    }
+
     if (!selection) {
       yield {
         type: 'done',

@@ -1,6 +1,5 @@
 import { readFile, mkdir } from "node:fs/promises";
 import { join, resolve, isAbsolute } from "node:path";
-import matter from "gray-matter";
 import type { WorkspaceConfig } from "../config/schema.js";
 import type {
   AgentProfile,
@@ -27,40 +26,6 @@ async function safeRead(
     }
     throw err;
   }
-}
-
-/**
- * Parse the IDENTITY.md file into the relevant AgentProfile fields.
- * The file is expected to have YAML frontmatter with keys:
- *   name, vibe, emoji, avatar
- * and a markdown body that becomes the `identity` field.
- */
-async function loadIdentity(
-  wsPath: string,
-): Promise<Pick<AgentProfile, "name" | "vibe" | "emoji" | "avatar" | "identity" | "configured">> {
-  const raw = await safeRead(join(wsPath, "IDENTITY.md"));
-
-  if (!raw) {
-    return {
-      name: "Scooby",
-      vibe: "friendly",
-      emoji: "\uD83D\uDC36",
-      avatar: "",
-      identity: "",
-      configured: true, // Default to true for backward compatibility
-    };
-  }
-
-  const { data, content } = matter(raw);
-
-  return {
-    name: (data.name as string) ?? "Scooby",
-    vibe: (data.vibe as string) ?? "friendly",
-    emoji: (data.emoji as string) ?? "\uD83D\uDC36",
-    avatar: (data.avatar as string) ?? "",
-    identity: content.trim(),
-    configured: data.configured !== false, // Default true unless explicitly false
-  };
 }
 
 /**
@@ -96,12 +61,34 @@ async function ensureSubdirs(wsPath: string): Promise<void> {
 }
 
 /**
+ * Build a minimal default AgentProfile.
+ * Workspace no longer owns agent personality — that comes from the
+ * AgentRegistry. This placeholder is populated externally.
+ */
+function defaultAgentProfile(): AgentProfile {
+  return {
+    name: "Scooby",
+    vibe: "friendly",
+    emoji: "\uD83D\uDC36",
+    avatar: "",
+    soul: "",
+    identity: "",
+    tools: "",
+    bootstrap: "",
+    configured: true,
+    scratchpad: "",
+    heartbeatChecklist: "",
+  };
+}
+
+/**
  * Load a single workspace from disk.
  *
- * @param workspaceConfig - The workspace entry from `ScoobyConfig.workspaces`.
- * @param configDir       - Absolute directory of the config file, used to
- *                          resolve relative workspace paths.
- * @returns A fully initialised `Workspace` ready for the runtime.
+ * Agent personality is no longer stored in the workspace directory.
+ * The workspace still owns: sessions, data, memory, scratchpad,
+ * heartbeat checklist, and permissions.
+ *
+ * After loading, set `ws.agent` from the AgentRegistry externally.
  */
 export async function loadWorkspace(
   workspaceConfig: WorkspaceConfig,
@@ -114,23 +101,16 @@ export async function loadWorkspace(
   // Ensure required subdirectories exist.
   await ensureSubdirs(absolutePath);
 
-  // Load agent profile files in parallel.
-  const [identityFields, soul, tools, bootstrap, welcomeContext, scratchpad, heartbeatChecklist] = await Promise.all([
-    loadIdentity(absolutePath),
-    safeRead(join(absolutePath, "SOUL.md")),
-    safeRead(join(absolutePath, "TOOLS.md")),
-    safeRead(join(absolutePath, "BOOTSTRAP.md")),
-    safeRead(join(absolutePath, "WELCOME.md")),
+  // Load workspace-level state files
+  const [scratchpad, heartbeatChecklist] = await Promise.all([
     safeRead(join(absolutePath, "SCRATCHPAD.md")),
     safeRead(join(absolutePath, "HEARTBEAT.md")),
   ]);
 
+  // Start with a default agent profile; the caller will replace it
+  // with the correct agent from the AgentRegistry.
   const agent: AgentProfile = {
-    ...identityFields,
-    soul,
-    tools,
-    bootstrap,
-    welcomeContext: welcomeContext || undefined,
+    ...defaultAgentProfile(),
     scratchpad,
     heartbeatChecklist,
   };

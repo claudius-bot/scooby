@@ -29,6 +29,20 @@ export interface AgentProfile {
   scratchpad: string;
   /** Contents of HEARTBEAT.md — periodic heartbeat checklist. */
   heartbeatChecklist: string;
+  /** Unique agent identifier (from agent.json). */
+  id?: string;
+  /** Brief description of what this agent does (for routing). */
+  about?: string;
+  /** Model reference: "fast", "slow", or "provider/model". */
+  modelRef?: string;
+  /** Fallback model reference if primary is unavailable. */
+  fallbackModelRef?: string;
+  /** Explicit list of tool names this agent can use. */
+  allowedTools?: string[];
+  /** Whether to include universal tools (memory, scratchpad, etc.). Defaults to true. */
+  universalTools?: boolean;
+  /** Skill names this agent uses. */
+  skillNames?: string[];
 }
 
 /**

@@ -122,7 +122,7 @@ export type WorkspaceHeartbeatConfig = z.infer<typeof WorkspaceHeartbeatConfigSc
 export const WorkspaceConfigSchema = z.object({
   id: z.string(),
   path: z.string(),
-  activeAgent: z.string().optional(),
+  defaultAgent: z.string().optional(),
   models: ModelsConfigSchema.optional(),
   telegram: z.object({ chatIds: z.array(z.number()) }).optional(),
   permissions: WorkspacePermissionsConfigSchema.optional(),
@@ -234,6 +234,21 @@ export const SkillsConfigSchema = z.object({
 
 export type SkillsConfig = z.infer<typeof SkillsConfigSchema>;
 
+// ── Routing config ──────────────────────────────────────────────────
+export const RoutingConfigSchema = z.object({
+  model: z.string().optional(),
+  prompt: z.string().optional(),
+});
+
+export type RoutingConfig = z.infer<typeof RoutingConfigSchema>;
+
+// ── Agents config ───────────────────────────────────────────────────
+export const AgentsConfigSchema = z.object({
+  dir: z.string().default('./agents'),
+});
+
+export type AgentsConfig = z.infer<typeof AgentsConfigSchema>;
+
 // ── Root config ──────────────────────────────────────────────────────
 export const ScoobyConfigSchema = z.object({
   models: ModelsConfigSchema,
@@ -245,6 +260,9 @@ export const ScoobyConfigSchema = z.object({
   heartbeat: HeartbeatSettingsSchema.optional(),
   memory: MemoryConfigSchema.optional(),
   skills: SkillsConfigSchema,
+  agents: AgentsConfigSchema.optional(),
+  routing: RoutingConfigSchema.optional(),
+  debug: z.boolean().default(false),
 });
 
 export type ScoobyConfig = z.infer<typeof ScoobyConfigSchema>;
