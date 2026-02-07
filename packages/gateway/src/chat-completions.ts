@@ -120,10 +120,18 @@ function toAiSdkMessages(messages: OpenAIMessage[]): Array<{ role: 'user' | 'ass
 }
 
 /**
- * Find the most recent active call from the registry.
- * Used to determine which channel to send clarification requests to.
+ * Find the active call matching a session ID, or fall back to the most recent call.
  */
-function findActiveCall() {
+function findActiveCall(sessionId?: string | null) {
+  // Try exact match by session ID first
+  if (sessionId) {
+    for (const [, entry] of activeCallRegistry) {
+      if (entry.sessionId === sessionId) {
+        return entry;
+      }
+    }
+  }
+  // Fall back to most recent entry
   let lastEntry: { workspaceId: string; sessionId: string; phoneNumber: string; channelType?: string; channelConversationId?: string } | undefined;
   for (const [, entry] of activeCallRegistry) {
     lastEntry = entry;
@@ -135,7 +143,7 @@ function findActiveCall() {
  * Create the ask_user AI SDK tool for Daphne. Sends a message to the user's
  * original chat channel and waits for their reply (up to 2 minutes).
  */
-function createAskUserTool(askChannelUser?: ChatCompletionsContext['askChannelUser']) {
+function createAskUserTool(askChannelUser?: ChatCompletionsContext['askChannelUser'], sessionId?: string | null) {
   const schema = z.object({
     question: z.string().describe('The question to ask your user (be specific and concise)'),
   });
@@ -147,7 +155,7 @@ function createAskUserTool(askChannelUser?: ChatCompletionsContext['askChannelUs
     inputSchema: schema,
     execute: async (input: z.infer<typeof schema>) => {
       const { question } = input;
-      const activeCall = findActiveCall();
+      const activeCall = findActiveCall(sessionId);
       if (!activeCall?.channelType || !activeCall?.channelConversationId || !askChannelUser) {
         return 'Unable to reach the user right now. Please use your best judgment to proceed.';
       }
@@ -213,11 +221,22 @@ export function createChatCompletionsApi(ctx: ChatCompletionsContext) {
     // call routed through the custom LLM integration. Use Daphne — a
     // dedicated, lightweight voice agent — instead of the full bot.
     if (isVoiceCallRequest(messages)) {
+      // Log all incoming headers for debugging
+      const headers: Record<string, string> = {};
+      c.req.raw.headers.forEach((value: string, key: string) => {
+        headers[key] = value;
+      });
+      console.log('[Daphne] Incoming request headers:', JSON.stringify(headers, null, 2));
+
       const systemMsg = messages.find((m) => m.role === 'system');
       const daphneSystem = buildDaphneSystemPrompt(systemMsg?.content ?? '');
       const conversationMessages = toAiSdkMessages(messages);
       const globalModels = ctx.getGlobalModels();
       const modelName = 'daphne';
+
+      // Read session ID from request header to identify the active call
+      const callSessionId = c.req.header('x-scooby-session-id') ?? null;
+      console.log('[Daphne] Session ID from header:', callSessionId ?? '(not set)');
 
       // Prefer fast models for low-latency voice responses
       const candidates: FailoverCandidate[] = globalModels.fast.map((c) => ({
@@ -229,7 +248,7 @@ export function createChatCompletionsApi(ctx: ChatCompletionsContext) {
         return c.json(openaiError('No models configured', 'server_error', 'no_models'), 500);
       }
 
-      const daphneTools = { ask_user: createAskUserTool(ctx.askChannelUser) };
+      const daphneTools = { ask_user: createAskUserTool(ctx.askChannelUser, callSessionId) };
 
       if (stream) {
         return daphneStreamResponse(c, candidates, daphneSystem, conversationMessages, daphneTools, completionId, created, modelName);

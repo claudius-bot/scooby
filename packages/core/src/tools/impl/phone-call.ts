@@ -1,11 +1,14 @@
 import { z } from 'zod';
 import type { ScoobyToolDefinition } from '../types.js';
+import { getConversationDetails } from './phone-call-status.js';
 
 // ============================================================================
 // Constants
 // ============================================================================
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+const CALL_POLL_INTERVAL_MS = 5_000;
+const CALL_MAX_WAIT_MS = 10 * 60_000; // 10 minutes
 const ELEVENLABS_BASE_URL = 'https://api.elevenlabs.io';
 
 // In-memory map: conversationId -> call metadata (including originating channel info)
@@ -34,6 +37,7 @@ export interface PhoneCallOptions {
   toNumber: string;
   context?: string;
   firstMessage?: string;
+  sessionId?: string;
   dynamicVariables?: Record<string, string>;
   timeoutMs?: number;
 }
@@ -84,6 +88,9 @@ export async function initiatePhoneCall(options: PhoneCallOptions): Promise<Phon
   }
   if (firstMessage) {
     vars.first_message = firstMessage;
+  }
+  if (options.sessionId) {
+    vars.session_id = options.sessionId;
   }
   if (Object.keys(vars).length > 0) {
     body.conversation_initiation_client_data = { dynamic_variables: vars };
@@ -150,10 +157,10 @@ export function isPhoneCallConfigured(): boolean {
 export const phoneCallTool: ScoobyToolDefinition = {
   name: 'phone_call',
   description:
-    'Initiate an outbound phone call using a voice agent named Daphne. ' +
-    'Daphne acts as the user\'s personal assistant — she will call the number, speak to whoever answers, ' +
-    'and handle the conversation autonomously on the user\'s behalf. ' +
-    'You do NOT need to monitor or manage the call after initiating it. ' +
+    'Make an outbound phone call using a voice agent named Daphne. ' +
+    'Daphne acts as the user\'s personal assistant — she calls the number, handles the entire conversation, ' +
+    'and this tool returns the full result (transcript, outcome, duration) once the call is complete. ' +
+    'The tool blocks until the call finishes, just like image generation blocks until the image is ready. ' +
     'IMPORTANT: The "context" parameter is Daphne\'s only briefing — it must contain ALL details she needs ' +
     'to complete the task without asking the call recipient for information she should already know. ' +
     'Requires ELEVENLABS_API_KEY, ELEVENLABS_AGENT_ID, and ELEVENLABS_PHONE_NUMBER_ID.',
@@ -190,7 +197,7 @@ export const phoneCallTool: ScoobyToolDefinition = {
     // Prevent duplicate calls — if there's already an active call to this number, bail out
     for (const [, call] of activeCallRegistry) {
       if (call.phoneNumber === input.phoneNumber) {
-        return `There is already an active phone call to ${input.phoneNumber}. Wait for it to complete before calling again. Use phone_call_status to check on the call.`;
+        return `There is already an active phone call to ${input.phoneNumber}. Wait for it to complete before calling again.`;
       }
     }
 
@@ -204,20 +211,23 @@ export const phoneCallTool: ScoobyToolDefinition = {
       return 'Error: No phone number ID provided. Set ELEVENLABS_PHONE_NUMBER_ID or pass phoneNumberId parameter.';
     }
 
+    // 1. Initiate the call
     const result = await initiatePhoneCall({
       agentId,
       agentPhoneNumberId: phoneNumberId,
       toNumber: input.phoneNumber,
       context: input.context,
       firstMessage: input.firstMessage,
+      sessionId: ctx.session.id,
     });
 
     if (!result.success) {
       return `Error: ${result.error}`;
     }
 
-    if (result.conversationId) {
-      activeCallRegistry.set(result.conversationId, {
+    const conversationId = result.conversationId;
+    if (conversationId) {
+      activeCallRegistry.set(conversationId, {
         workspaceId: ctx.workspace.id,
         sessionId: ctx.session.id,
         phoneNumber: input.phoneNumber,
@@ -226,12 +236,68 @@ export const phoneCallTool: ScoobyToolDefinition = {
       });
     }
 
-    const parts = [
-      `Phone call initiated to ${input.phoneNumber}.`,
-      'The voice agent is now handling the call autonomously.',
-    ];
-    if (result.conversationId) parts.push(`Conversation ID: ${result.conversationId}`);
-    if (result.callId) parts.push(`Call SID: ${result.callId}`);
-    return parts.join('\n');
+    // 2. Poll until the call completes (or times out)
+    if (!conversationId) {
+      return `Phone call initiated to ${input.phoneNumber} but no conversation ID was returned. Unable to track the call.`;
+    }
+
+    const startTime = Date.now();
+    let lastStatus = 'initiated';
+
+    while (Date.now() - startTime < CALL_MAX_WAIT_MS) {
+      await new Promise((resolve) => setTimeout(resolve, CALL_POLL_INTERVAL_MS));
+
+      const details = await getConversationDetails(conversationId);
+      if (!details.success) {
+        // Transient API error — keep polling
+        continue;
+      }
+
+      lastStatus = details.status ?? 'unknown';
+
+      if (lastStatus === 'done' || lastStatus === 'failed') {
+        // Call is complete — clean up registry and return full result
+        activeCallRegistry.delete(conversationId);
+
+        const parts: string[] = [];
+        parts.push(`Phone call to ${input.phoneNumber} completed.`);
+        parts.push(`Status: ${lastStatus}`);
+
+        if (details.duration != null) {
+          parts.push(`Duration: ${details.duration}s`);
+        }
+
+        if (details.transcript && details.transcript.length > 0) {
+          parts.push('');
+          parts.push('Transcript:');
+          for (const turn of details.transcript) {
+            parts.push(`  ${turn.role}: ${turn.message}`);
+          }
+        }
+
+        if (details.analysis?.call_successful) {
+          parts.push('');
+          parts.push(`Outcome: ${details.analysis.call_successful}`);
+        }
+
+        if (details.analysis?.transcript_summary) {
+          parts.push(`Summary: ${details.analysis.transcript_summary}`);
+        }
+
+        if (details.analysis?.data_collection_results && Object.keys(details.analysis.data_collection_results).length > 0) {
+          parts.push('');
+          parts.push('Collected Data:');
+          for (const [key, value] of Object.entries(details.analysis.data_collection_results)) {
+            parts.push(`  ${key}: ${JSON.stringify(value)}`);
+          }
+        }
+
+        return parts.join('\n');
+      }
+    }
+
+    // Timed out waiting — clean up and report what we know
+    activeCallRegistry.delete(conversationId);
+    return `Phone call to ${input.phoneNumber} timed out after ${Math.round(CALL_MAX_WAIT_MS / 60_000)} minutes. Last known status: ${lastStatus}. Conversation ID: ${conversationId}`;
   },
 };
