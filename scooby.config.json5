@@ -29,7 +29,7 @@
     model: 'anthropic/claude-haiku-4.5',
   },
 
-  debug: false,
+  debug: true,
 
   workspaces: [
     {
