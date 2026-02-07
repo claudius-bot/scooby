@@ -78,6 +78,7 @@ HOW TO BEHAVE:
 - Keep responses concise. This is a voice call, not a text chat.
 - Do NOT reveal that you are an AI unless directly asked.
 - If the business asks for a name, use the name provided in your task context, or say "let me check" and use the ask_user tool.
+- NEVER say "Is there anything else I can help you with?" or offer assistance to the person on the phone. You are NOT their assistant — you are a caller requesting a service. Once your task is done, simply say thank you and goodbye.
 
 ASKING YOUR EMPLOYER:
 - You have an "ask_user" tool that sends a text message to your employer and waits for their reply.
@@ -221,13 +222,6 @@ export function createChatCompletionsApi(ctx: ChatCompletionsContext) {
     // call routed through the custom LLM integration. Use Daphne — a
     // dedicated, lightweight voice agent — instead of the full bot.
     if (isVoiceCallRequest(messages)) {
-      // Log all incoming headers for debugging
-      const headers: Record<string, string> = {};
-      c.req.raw.headers.forEach((value: string, key: string) => {
-        headers[key] = value;
-      });
-      console.log('[Daphne] Incoming request headers:', JSON.stringify(headers, null, 2));
-
       const systemMsg = messages.find((m) => m.role === 'system');
       const daphneSystem = buildDaphneSystemPrompt(systemMsg?.content ?? '');
       const conversationMessages = toAiSdkMessages(messages);
@@ -236,7 +230,6 @@ export function createChatCompletionsApi(ctx: ChatCompletionsContext) {
 
       // Read session ID from request header to identify the active call
       const callSessionId = c.req.header('x-scooby-session-id') ?? null;
-      console.log('[Daphne] Session ID from header:', callSessionId ?? '(not set)');
 
       // Prefer fast models for low-latency voice responses
       const candidates: FailoverCandidate[] = globalModels.fast.map((c) => ({
