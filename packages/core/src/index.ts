@@ -30,6 +30,8 @@ export { sessionToMarkdown } from './memory/session-export.js';
 export * from './automation/scheduler.js';
 export * from './automation/heartbeat.js';
 export * from './automation/webhooks.js';
+export * from './automation/duration.js';
+export * from './automation/workspace-heartbeat.js';
 
 // Usage tracking
 export * from './usage/pricing.js';
@@ -81,6 +83,7 @@ export { fileListTool } from './tools/impl/file-list.js';
 export { fileDeleteTool } from './tools/impl/file-delete.js';
 export { fileMoveTool } from './tools/impl/file-move.js';
 export { fileSearchTool } from './tools/impl/file-search.js';
+export { cronAddTool, cronRemoveTool, cronListTool } from './tools/impl/cron-tools.js';
 export {
   phoneCallTool,
   initiatePhoneCall,

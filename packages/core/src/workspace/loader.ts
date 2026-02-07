@@ -115,13 +115,14 @@ export async function loadWorkspace(
   await ensureSubdirs(absolutePath);
 
   // Load agent profile files in parallel.
-  const [identityFields, soul, tools, bootstrap, welcomeContext, scratchpad] = await Promise.all([
+  const [identityFields, soul, tools, bootstrap, welcomeContext, scratchpad, heartbeatChecklist] = await Promise.all([
     loadIdentity(absolutePath),
     safeRead(join(absolutePath, "SOUL.md")),
     safeRead(join(absolutePath, "TOOLS.md")),
     safeRead(join(absolutePath, "BOOTSTRAP.md")),
     safeRead(join(absolutePath, "WELCOME.md")),
     safeRead(join(absolutePath, "SCRATCHPAD.md")),
+    safeRead(join(absolutePath, "HEARTBEAT.md")),
   ]);
 
   const agent: AgentProfile = {
@@ -131,6 +132,7 @@ export async function loadWorkspace(
     bootstrap,
     welcomeContext: welcomeContext || undefined,
     scratchpad,
+    heartbeatChecklist,
   };
 
   const permissions = resolvePermissions(workspaceConfig, absolutePath);

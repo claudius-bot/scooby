@@ -21,7 +21,7 @@
     "@scooby/schemas": "workspace:*",
     "ai": "^6.0.69",
     "better-sqlite3": "^11.7.0",
-    "cron": "^3.3.0",
+    "croner": "^9.0.0",
     "gray-matter": "^4.0.3",
     "json5": "^2.2.3",
     "linkedom": "^0.18.12",

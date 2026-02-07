@@ -6,14 +6,22 @@ export class JsonStore<T> {
   constructor(private filePath: string) {}
 
   async read(): Promise<T | null> {
+    let raw: string;
     try {
-      const raw = await readFile(this.filePath, 'utf-8');
-      return JSON.parse(raw) as T;
+      raw = await readFile(this.filePath, 'utf-8');
     } catch (err: unknown) {
       if (err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
         return null;
       }
       throw err;
+    }
+    try {
+      return JSON.parse(raw) as T;
+    } catch (parseErr: unknown) {
+      throw new Error(
+        `Failed to parse JSON at ${this.filePath}: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`,
+        { cause: parseErr },
+      );
     }
   }
 

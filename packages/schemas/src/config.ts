@@ -42,6 +42,82 @@ export const WorkspacePermissionsConfigSchema = z.object({
 
 export type WorkspacePermissionsConfig = z.infer<typeof WorkspacePermissionsConfigSchema>;
 
+// ── Delivery target (shared by cron + heartbeat) ─────────────────────
+export const DeliveryTargetSchema = z.object({
+  channel: z.string(),
+  conversationId: z.string(),
+});
+
+export type DeliveryTarget = z.infer<typeof DeliveryTargetSchema>;
+
+// ── Cron schedule (discriminated union) ──────────────────────────────
+export const CronScheduleSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('every'), interval: z.string(), anchorMs: z.number().optional() }),
+  z.object({ kind: z.literal('daily'), time: z.string() }),
+  z.object({ kind: z.literal('cron'), expression: z.string() }),
+  z.object({ kind: z.literal('at'), at: z.string() }),
+]);
+
+export type CronSchedule = z.infer<typeof CronScheduleSchema>;
+
+// ── Per-workspace cron entry ─────────────────────────────────────────
+export const CronJobStateSchema = z.object({
+  nextRunAtMs: z.number().optional(),
+  runningAtMs: z.number().optional(),
+  lastStatus: z.enum(['success', 'error', 'skipped']).optional(),
+});
+
+export type CronJobState = z.infer<typeof CronJobStateSchema>;
+
+export const WorkspaceCronEntrySchema = z.object({
+  id: z.string(),
+  name: z.string().optional(),
+  schedule: CronScheduleSchema,
+  prompt: z.string(),
+  enabled: z.boolean().default(true),
+  delivery: DeliveryTargetSchema.optional(),
+  source: z.enum(['config', 'agent']).default('config'),
+  createdAt: z.string().optional(),
+  state: CronJobStateSchema.default({}),
+});
+
+export type WorkspaceCronEntry = z.infer<typeof WorkspaceCronEntrySchema>;
+
+// ── Cron run history record ──────────────────────────────────────────
+export const CronRunRecordSchema = z.object({
+  jobId: z.string(),
+  startedAt: z.string(),
+  completedAt: z.string().optional(),
+  status: z.enum(['success', 'error', 'skipped']),
+  response: z.string().optional(),
+  error: z.string().optional(),
+  delivered: z.boolean().default(false),
+  sessionId: z.string().optional(),
+  durationMs: z.number().optional(),
+});
+
+export type CronRunRecord = z.infer<typeof CronRunRecordSchema>;
+
+// ── Active hours (for heartbeat) ─────────────────────────────────────
+export const ActiveHoursSchema = z.object({
+  start: z.string(),
+  end: z.string(),
+  timezone: z.string().default('UTC'),
+});
+
+export type ActiveHours = z.infer<typeof ActiveHoursSchema>;
+
+// ── Per-workspace heartbeat config ───────────────────────────────────
+export const WorkspaceHeartbeatConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  intervalMinutes: z.number().default(30),
+  delivery: DeliveryTargetSchema.optional(),
+  activeHours: ActiveHoursSchema.optional(),
+  suppressToken: z.string().default('HEARTBEAT_OK'),
+});
+
+export type WorkspaceHeartbeatConfig = z.infer<typeof WorkspaceHeartbeatConfigSchema>;
+
 // ── Workspace entry ──────────────────────────────────────────────────
 export const WorkspaceConfigSchema = z.object({
   id: z.string(),
@@ -50,6 +126,8 @@ export const WorkspaceConfigSchema = z.object({
   models: ModelsConfigSchema.optional(),
   telegram: z.object({ chatIds: z.array(z.number()) }).optional(),
   permissions: WorkspacePermissionsConfigSchema.optional(),
+  cron: z.array(WorkspaceCronEntrySchema).optional(),
+  heartbeat: WorkspaceHeartbeatConfigSchema.optional(),
 });
 
 export type WorkspaceConfig = z.infer<typeof WorkspaceConfigSchema>;
@@ -89,18 +167,6 @@ export const SessionConfigSchema = z.object({
 });
 
 export type SessionConfig = z.infer<typeof SessionConfigSchema>;
-
-// ── Cron entry ───────────────────────────────────────────────────────
-export const CronEntrySchema = z.object({
-  id: z.string(),
-  workspace: z.string(),
-  type: z.enum(["every", "at", "cron"]),
-  schedule: z.string(),
-  prompt: z.string(),
-  enabled: z.boolean().default(true),
-});
-
-export type CronEntry = z.infer<typeof CronEntrySchema>;
 
 // ── Heartbeat ────────────────────────────────────────────────────────
 export const HeartbeatSettingsSchema = z.object({
@@ -176,7 +242,6 @@ export const ScoobyConfigSchema = z.object({
   gateway: GatewayConfigSchema.optional(),
   aiGateway: AiGatewayConfigSchema.optional(),
   session: SessionConfigSchema.optional(),
-  cron: z.array(CronEntrySchema).optional(),
   heartbeat: HeartbeatSettingsSchema.optional(),
   memory: MemoryConfigSchema.optional(),
   skills: SkillsConfigSchema,
