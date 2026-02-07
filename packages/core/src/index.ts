@@ -2,6 +2,7 @@
 
 export * from './config/schema.js';
 export * from './config/loader.js';
+export * from './config/model-overrides.js';
 export * from './workspace/types.js';
 export * from './workspace/loader.js';
 export * from './ai/provider.js';
