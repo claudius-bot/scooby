@@ -210,8 +210,8 @@ export class AgentRunner {
           providerOptions: gatewayOpts ? { gateway: gatewayOpts } : undefined,
         });
 
-        // Collect tool calls and results for potential continuation
-        const toolCallsInRun: Array<{ toolName: string; args: unknown; result: unknown }> = [];
+        // Collect tool calls and results for potential continuation (including toolCallId for message reconstruction)
+        const toolCallsInRun: Array<{ toolCallId: string; toolName: string; args: unknown; result: unknown }> = [];
 
         for await (const part of result.fullStream) {
           switch (part.type) {
@@ -225,7 +225,7 @@ export class AgentRunner {
               if (slowTools.includes(part.toolName) && currentGroup === 'fast') {
                 escState = escalate(escState, `Tool ${part.toolName} requests slow model`);
               }
-              toolCallsInRun.push({ toolName: part.toolName, args: part.input, result: undefined });
+              toolCallsInRun.push({ toolCallId: (part as any).toolCallId ?? `call_${toolCallsInRun.length}`, toolName: part.toolName, args: part.input, result: undefined });
               break;
             case 'tool-result':
               lastToolResult = typeof part.output === 'string' ? part.output : JSON.stringify(part.output);
@@ -234,10 +234,11 @@ export class AgentRunner {
                 toolName: part.toolName,
                 result: lastToolResult,
               };
-              // Update the last matching tool call with its result
-              const lastCall = [...toolCallsInRun]
-                .reverse()
-                .find((tc) => tc.toolName === part.toolName && tc.result === undefined);
+              // Update the matching tool call with its result (prefer toolCallId match, fall back to name match)
+              const matchId = (part as any).toolCallId;
+              const lastCall = matchId
+                ? toolCallsInRun.find((tc) => tc.toolCallId === matchId)
+                : [...toolCallsInRun].reverse().find((tc) => tc.toolName === part.toolName && tc.result === undefined);
               if (lastCall) {
                 lastCall.result = part.output;
               }
@@ -245,7 +246,16 @@ export class AgentRunner {
           }
         }
 
-        // After stream completes, check if we need to escalate and re-run
+        // After stream completes, collect properly-formatted response messages
+        // from the AI SDK steps (these include tool-call and tool-result parts
+        // in the exact format that standardize-prompt validates).
+        const completedSteps = await result.steps;
+        const responseMessages: ModelMessage[] = [];
+        for (const step of completedSteps) {
+          responseMessages.push(...(step.response.messages as ModelMessage[]));
+        }
+
+        // Check if we need to escalate and re-run with a stronger model
         if (escState.escalated && currentGroup === 'fast' && stepHadToolCalls) {
           const previousModel = `${selection.candidate.provider}:${selection.candidate.model}`;
           currentGroup = 'slow';
@@ -263,15 +273,18 @@ export class AgentRunner {
             selection = newSelection;
             needsEscalationRerun = true;
 
-            // Build continuation messages: original + assistant response + tool results
-            // The AI SDK handles this internally, but for a clean restart we append context
-            if (fullResponse) {
+            // Append the AI SDK's own response messages so the slow model sees
+            // the full tool interaction history (tool-call + tool-result pairs).
+            if (responseMessages.length > 0) {
+              currentMessages = [...currentMessages, ...responseMessages];
+            } else if (fullResponse) {
               currentMessages = [
                 ...currentMessages,
                 { role: 'assistant' as const, content: fullResponse },
               ];
-              fullResponse = ''; // Reset for continuation
             }
+
+            fullResponse = ''; // Reset for continuation
           }
         }
 
