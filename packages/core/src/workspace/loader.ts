@@ -74,7 +74,6 @@ function defaultAgentProfile(): AgentProfile {
     soul: "",
     identity: "",
     tools: "",
-    bootstrap: "",
     configured: true,
     scratchpad: "",
     heartbeatChecklist: "",

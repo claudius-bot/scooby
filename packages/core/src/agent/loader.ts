@@ -58,10 +58,9 @@ export async function loadAgentDefinitions(agentsDir: string): Promise<Map<strin
     const def = result.data;
 
     // Load markdown files in parallel
-    const [identity, soul, bootstrap, tools, scratchpad] = await Promise.all([
+    const [identity, soul, tools, scratchpad] = await Promise.all([
       safeRead(join(agentDir, 'IDENTITY.md')),
       safeRead(join(agentDir, 'SOUL.md')),
-      safeRead(join(agentDir, 'BOOTSTRAP.md')),
       safeRead(join(agentDir, 'TOOLS.md')),
       safeRead(join(agentDir, 'SCRATCHPAD.md')),
     ]);
@@ -74,7 +73,6 @@ export async function loadAgentDefinitions(agentsDir: string): Promise<Map<strin
       soul,
       identity,
       tools,
-      bootstrap,
       configured: true,
       scratchpad,
       heartbeatChecklist: '',

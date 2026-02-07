@@ -59,12 +59,7 @@ Be friendly and welcoming during this process.`;
     parts.push(`# Soul\n\n${ctx.agent.soul}`);
   }
 
-  // 3. Bootstrap instructions
-  if (ctx.agent.bootstrap) {
-    parts.push(`# Instructions\n\n${ctx.agent.bootstrap}`);
-  }
-
-  // 4. Tool preferences
+  // 3. Tool preferences
   if (ctx.agent.tools) {
     parts.push(`# Tool Usage\n\n${ctx.agent.tools}`);
   }
