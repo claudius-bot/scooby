@@ -263,10 +263,6 @@ export class AgentRunner {
 
           if (newSelection) {
             const newModel = `${newSelection.candidate.provider}:${newSelection.candidate.model}`;
-            console.log(`[escalation] Switching model: ${previousModel} → ${newModel} (reason: ${escState.reason ?? 'threshold exceeded'})`);
-            console.log(`[escalation] Tool calls in run: ${toolCallsInRun.map(tc => `${tc.toolName}(${tc.toolCallId})`).join(', ') || 'none'}`);
-            console.log(`[escalation] Steps completed: ${completedSteps.length}, response messages: ${responseMessages.length}`);
-
             yield {
               type: 'model-switch',
               from: previousModel,
@@ -280,17 +276,12 @@ export class AgentRunner {
             // Append the AI SDK's own response messages so the slow model sees
             // the full tool interaction history (tool-call + tool-result pairs).
             if (responseMessages.length > 0) {
-              console.log(`[escalation] Appending ${responseMessages.length} response message(s) with roles: ${responseMessages.map(m => m.role).join(', ')}`);
               currentMessages = [...currentMessages, ...responseMessages];
             } else if (fullResponse) {
-              // Fallback: no structured messages, just carry text forward
-              console.warn('[escalation] No response messages from AI SDK — falling back to text-only continuation');
               currentMessages = [
                 ...currentMessages,
                 { role: 'assistant' as const, content: fullResponse },
               ];
-            } else {
-              console.warn('[escalation] No continuation context available — slow model will see only original messages');
             }
 
             fullResponse = ''; // Reset for continuation
