@@ -23,7 +23,9 @@ export type WsMethod =
   | 'session.list'
   | 'session.get'
   | 'workspace.list'
-  | 'workspace.get';
+  | 'workspace.get'
+  | 'subscribe'
+  | 'unsubscribe';
 
 // Method parameter types
 export interface ChatSendParams {
@@ -47,6 +49,15 @@ export interface SessionGetParams {
   sessionId: string;
 }
 
+export interface SubscribeParams {
+  topics: string[];
+  workspaceId?: string;
+}
+
+export interface UnsubscribeParams {
+  topics: string[];
+}
+
 // Event types pushed by server
 export type ServerEvent =
   | 'chat.text-delta'
@@ -55,7 +66,25 @@ export type ServerEvent =
   | 'chat.done'
   | 'chat.error'
   | 'chat.model-switch'
-  | 'chat.message';
+  | 'chat.message'
+  | 'session.created'
+  | 'session.archived'
+  | 'session.agent-switched'
+  | 'workspace.updated'
+  | 'cron.executed'
+  | 'system.health';
+
+/**
+ * Known subscription topic names for wildcard expansion.
+ */
+export const SUBSCRIPTION_TOPICS = [
+  'session.created',
+  'session.archived',
+  'session.agent-switched',
+  'workspace.updated',
+  'cron.executed',
+  'system.health',
+] as const;
 
 export function createResponse(id: string, result: unknown): WsResponse {
   return { id, result };
