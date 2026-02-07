@@ -28,6 +28,8 @@ export {
   type QmdConfig,
   MemoryConfigSchema,
   type MemoryConfig,
+  SkillsConfigSchema,
+  type SkillsConfig,
   ScoobyConfigSchema,
   type ScoobyConfig,
 } from "@scooby/schemas";

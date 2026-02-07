@@ -67,6 +67,16 @@ export const GatewayConfigSchema = z.object({
   host: z.string().default("0.0.0.0"),
   port: z.number().default(3000),
   websocket: z.object({ path: z.string().default("/ws") }).optional(),
+  auth: z.object({
+    token: z.string().optional(),
+  }).optional(),
+  http: z.object({
+    endpoints: z.object({
+      chatCompletions: z.object({
+        enabled: z.boolean().default(false),
+      }).optional(),
+    }).optional(),
+  }).optional(),
 });
 
 export type GatewayConfig = z.infer<typeof GatewayConfigSchema>;
@@ -147,6 +157,17 @@ export const MemoryConfigSchema = z.object({
 
 export type MemoryConfig = z.infer<typeof MemoryConfigSchema>;
 
+// ── Skills config ───────────────────────────────────────────────────
+export const SkillsConfigSchema = z.object({
+  globalDir: z.string().optional(),
+  entries: z.record(z.object({
+    apiKey: z.string().optional(),
+    env: z.record(z.string()).optional(),
+  })).optional(),
+}).optional();
+
+export type SkillsConfig = z.infer<typeof SkillsConfigSchema>;
+
 // ── Root config ──────────────────────────────────────────────────────
 export const ScoobyConfigSchema = z.object({
   models: ModelsConfigSchema,
@@ -158,6 +179,7 @@ export const ScoobyConfigSchema = z.object({
   cron: z.array(CronEntrySchema).optional(),
   heartbeat: HeartbeatSettingsSchema.optional(),
   memory: MemoryConfigSchema.optional(),
+  skills: SkillsConfigSchema,
 });
 
 export type ScoobyConfig = z.infer<typeof ScoobyConfigSchema>;

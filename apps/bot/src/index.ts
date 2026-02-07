@@ -50,6 +50,8 @@ import {
   fileDeleteTool,
   fileMoveTool,
   fileSearchTool,
+  phoneCallTool,
+  activeCallRegistry,
   loadSkills,
 } from '@scooby/core';
 import {
@@ -60,7 +62,7 @@ import {
   type InboundMessage,
   type ChannelAdapter,
 } from '@scooby/channels';
-import { GatewayServer } from '@scooby/gateway';
+import { GatewayServer, createChatCompletionsApi } from '@scooby/gateway';
 import {
   CommandProcessor,
   createDefaultRegistry,
@@ -322,6 +324,7 @@ async function main() {
   toolRegistry.register(fileDeleteTool);
   toolRegistry.register(fileMoveTool);
   toolRegistry.register(fileSearchTool);
+  toolRegistry.register(phoneCallTool);
 
   // 6b. Create command processor, code manager, and workspace management
   const commandRegistry = createDefaultRegistry();
@@ -438,6 +441,45 @@ async function main() {
     }
   };
 
+  // 9b. Pending clarification system for Daphne voice agent
+  // When Daphne (on a phone call) needs user input, she sends a message to the
+  // user's channel and waits for a reply. This map tracks those pending requests.
+  const pendingClarifications = new Map<string, {
+    resolve: (response: string) => void;
+    timeout: ReturnType<typeof setTimeout>;
+  }>();
+
+  function clarificationKey(channelType: string, conversationId: string) {
+    return `${channelType}:${conversationId}`;
+  }
+
+  const askChannelUser = async (params: {
+    channelType: string;
+    conversationId: string;
+    question: string;
+    timeoutMs?: number;
+  }): Promise<string> => {
+    const { channelType, conversationId, question, timeoutMs = 120_000 } = params;
+
+    // Send the question to the channel
+    await sendMessage(channelType, {
+      conversationId,
+      text: question,
+      format: 'markdown',
+    });
+
+    // Wait for response
+    const key = clarificationKey(channelType, conversationId);
+    return new Promise<string>((resolve) => {
+      const timeout = setTimeout(() => {
+        pendingClarifications.delete(key);
+        resolve('No response received within the timeout period. Please proceed with your best judgment.');
+      }, timeoutMs);
+
+      pendingClarifications.set(key, { resolve, timeout });
+    });
+  };
+
   // 10. Gateway server
   const gatewayConfig = config.gateway ?? { host: '0.0.0.0', port: 3000 };
   const gateway = new GatewayServer(
@@ -481,8 +523,117 @@ async function main() {
         if (!ws) return { totals: {}, byModel: {}, byDay: {}, byAgent: {} };
         return loadUsageSummary(resolve(ws.path, 'data'), { days });
       },
+      handlePhoneCallWebhook: async (body: any) => {
+        // ElevenLabs wraps post-call webhooks in { type, data, event_timestamp }.
+        // Unwrap the envelope to get the conversation data.
+        const eventType = body.type;
+        const payload = body.data ?? body;
+
+        if (eventType === 'call_initiation_failure') {
+          console.warn(`[Scooby] Phone call webhook: call initiation failed`, payload);
+          return { ok: true };
+        }
+
+        const conversationId = payload.conversation_id;
+        if (!conversationId) {
+          return { ok: false };
+        }
+
+        const callInfo = activeCallRegistry.get(conversationId);
+        if (!callInfo) {
+          console.warn(`[Scooby] Phone call webhook: unknown conversation ${conversationId}`);
+          return { ok: false };
+        }
+
+        const sessionMgr = sessionManagers.get(callInfo.workspaceId);
+        if (!sessionMgr) {
+          return { ok: false };
+        }
+
+        // Build summary from webhook payload
+        const status = payload.status ?? 'unknown';
+        const duration = payload.metadata?.call_duration_secs;
+        const transcript = payload.transcript as Array<{ role: string; message: string }> | undefined;
+        const analysis = payload.analysis as { transcript_summary?: string; call_successful?: string } | undefined;
+
+        const lines: string[] = [
+          '[Phone Call Result]',
+          `Call to ${callInfo.phoneNumber} completed.`,
+          `Status: ${status}`,
+        ];
+        if (duration != null) {
+          lines.push(`Duration: ${duration}s`);
+        }
+        if (analysis?.call_successful) {
+          lines.push(`Outcome: ${analysis.call_successful}`);
+        }
+        if (analysis?.transcript_summary) {
+          lines.push(`Summary: ${analysis.transcript_summary}`);
+        }
+        if (transcript && transcript.length > 0) {
+          lines.push('Transcript:');
+          for (const turn of transcript) {
+            lines.push(`  ${turn.role}: ${turn.message}`);
+          }
+        }
+
+        await sessionMgr.appendTranscript(callInfo.sessionId, {
+          timestamp: new Date().toISOString(),
+          role: 'user',
+          content: lines.join('\n'),
+        });
+
+        // Clean up registry entry
+        activeCallRegistry.delete(conversationId);
+
+        console.log(`[Scooby] Phone call webhook: injected result for conversation ${conversationId}`);
+        return { ok: true };
+      },
     },
   );
+
+  // Mount chat completions endpoint if enabled
+  if (config.gateway?.http?.endpoints?.chatCompletions?.enabled) {
+    const chatApi = createChatCompletionsApi({
+      authToken: config.gateway?.auth?.token,
+      listWorkspaceIds: () => Array.from(workspaces.keys()),
+      getWorkspace: async (id) => {
+        const ws = workspaces.get(id);
+        if (!ws) return null;
+        return { id: ws.id, path: ws.path, agent: ws.agent, permissions: ws.permissions };
+      },
+      getSessionManager: (id) => sessionManagers.get(id)!,
+      getMemoryProvider: (id) => memoryProviders.get(id),
+      getMemoryService: (id) => memoryServices.get(id),
+      createAgentRunner: (_id) => new AgentRunner(toolRegistry, cooldowns, sessionManagers.get(_id)!),
+      getToolContext: (workspaceId, sessionId) => {
+        const ws = workspaces.get(workspaceId)!;
+        const memProvider = memoryProviders.get(workspaceId);
+        return {
+          workspace: { id: ws.id, path: ws.path },
+          session: { id: sessionId, workspaceId },
+          permissions: ws.permissions,
+          conversation: { channelType: 'api', conversationId: sessionId },
+          sendMessage,
+          memoryService: memoryServices.get(workspaceId),
+          memoryProvider: memProvider,
+          citationsEnabled: resolveCitations(config.memory, memProvider?.backendName ?? 'builtin'),
+        };
+      },
+      getGlobalModels: () => ({
+        fast: config.models.fast.candidates,
+        slow: config.models.slow.candidates,
+      }),
+      getUsageTracker: (id) => usageTrackers.get(id),
+      resolveCitations: (workspaceId) => {
+        const memProvider = memoryProviders.get(workspaceId);
+        return resolveCitations(config.memory, memProvider?.backendName ?? 'builtin');
+      },
+      askChannelUser,
+    });
+    gateway.getApp().route('/', chatApi);
+    console.log('[Scooby] Chat Completions endpoint enabled at /v1/chat/completions');
+  }
 
   // Register WebSocket method handlers
   gateway.registerMethod('chat.send', async (connectionId, params) => {
@@ -698,6 +849,16 @@ async function main() {
   // 11. Message handler for channel adapters
   const messageQueue = new MessageQueue({ debounceMs: 500 });
   messageQueue.onFlush(async (msg: InboundMessage) => {
+    // Check if this message is a reply to a pending Daphne clarification
+    const cKey = clarificationKey(msg.channelType, msg.conversationId);
+    const pending = pendingClarifications.get(cKey);
+    if (pending) {
+      clearTimeout(pending.timeout);
+      pendingClarifications.delete(cKey);
+      pending.resolve(msg.text);
+      return;
+    }
+
     const adapter = channelAdapters.find((a) => a.type === msg.channelType);
 
     // Check if this channel has an explicit binding
