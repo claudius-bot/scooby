@@ -1357,9 +1357,10 @@ async function main() {
             if (fullResponse) {
               const adapter = channelAdapters.find((a) => a.type === msg.channelType);
               if (adapter) {
+                const notice = config.debug ? fullResponse : fullResponse.replace(/\s*Reason:.*$/, '');
                 const handoffText = config.debug
-                  ? `${fullResponse}\n\n--- ${currentAgent.emoji} ${currentAgent.name}`
-                  : fullResponse;
+                  ? `${notice}\n\n--- ${currentAgent.emoji} ${currentAgent.name}`
+                  : notice;
                 const prepared = prepareOutboundText(handoffText, 'markdown', adapter.outputFormat);
                 await adapter.send({
                   conversationId: msg.conversationId,

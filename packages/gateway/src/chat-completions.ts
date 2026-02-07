@@ -400,8 +400,9 @@ export function createChatCompletionsApi(ctx: ChatCompletionsContext) {
           if (updatedSession?.agentId && updatedSession.agentId !== currentAgentId) {
             const resolved = await ctx.resolveAgent(workspaceId, updatedSession, '');
             if (resolved.agentId !== currentAgentId) {
-              // Save handoff notice from old agent
-              handoffNotice = fullResponse || `Switching to ${resolved.agent.emoji ?? ''} ${resolved.agent.name}...`.trim();
+              // Save handoff notice from old agent (strip reason unless debug)
+              const rawNotice = fullResponse || `Switching to ${resolved.agent.emoji ?? ''} ${resolved.agent.name}...`.trim();
+              handoffNotice = ctx.debug ? rawNotice : rawNotice.replace(/\s*Reason:.*$/, '');
               currentAgent = resolved.agent;
               currentAgentId = resolved.agentId;
               // Refresh transcript for re-run
