@@ -34,8 +34,6 @@ export interface ChatCompletionsContext {
   getGlobalModels: () => { fast: import('@scooby/core').ModelCandidate[]; slow: import('@scooby/core').ModelCandidate[] };
   getUsageTracker: (workspaceId: string) => import('@scooby/core').UsageTracker | undefined;
   resolveCitations: (workspaceId: string) => boolean;
-  globalSkillsDir?: string;
-  skillEntries?: Record<string, { apiKey?: string; env?: Record<string, string> }>;
   askChannelUser?: (params: {
     channelType: string;
     conversationId: string;
@@ -331,8 +329,6 @@ export function createChatCompletionsApi(ctx: ChatCompletionsContext) {
       channelType: 'api',
       citationsEnabled: ctx.resolveCitations(workspaceId),
       memoryBackend: memProvider?.backendName,
-      globalSkillsDir: ctx.globalSkillsDir,
-      skillEntries: ctx.skillEntries,
     };
 
     const modelName = `scooby:${workspaceId}`;

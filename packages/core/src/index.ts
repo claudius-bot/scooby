@@ -89,7 +89,6 @@ export {
   type PhoneCallOptions,
 } from './tools/impl/phone-call.js';
 export {
-  phoneCallStatusTool,
   getConversationDetails,
   type ConversationDetails,
 } from './tools/impl/phone-call-status.js';

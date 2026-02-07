@@ -51,7 +51,6 @@ import {
   fileMoveTool,
   fileSearchTool,
   phoneCallTool,
-  phoneCallStatusTool,
   activeCallRegistry,
   loadSkills,
 } from '@scooby/core';
@@ -86,9 +85,6 @@ async function main() {
   const configPath = resolve(__dirname, '..', '..', '..', 'scooby.config.json5');
   const config = await loadConfig(configPath);
   console.log(`[Scooby] Config loaded from ${configPath}`);
-
-  // 1a. Extract skills config
-  const skillsConfig = config.skills;
 
   // 1b. Configure AI Gateway if present
   if (config.aiGateway) {
@@ -292,8 +288,6 @@ async function main() {
       usageTracker: usageTrackers.get(workspaceId),
       agentName: ws.agent.name,
       channelType: 'system',
-      globalSkillsDir: skillsConfig?.globalDir,
-      skillEntries: skillsConfig?.entries,
     })) {
       // Consume silently
     }
@@ -331,7 +325,6 @@ async function main() {
   toolRegistry.register(fileMoveTool);
   toolRegistry.register(fileSearchTool);
   toolRegistry.register(phoneCallTool);
-  toolRegistry.register(phoneCallStatusTool);
 
   // 6b. Create command processor, code manager, and workspace management
   const commandRegistry = createDefaultRegistry();
@@ -636,8 +629,6 @@ async function main() {
         const memProvider = memoryProviders.get(workspaceId);
         return resolveCitations(config.memory, memProvider?.backendName ?? 'builtin');
       },
-      globalSkillsDir: skillsConfig?.globalDir,
-      skillEntries: skillsConfig?.entries,
       askChannelUser,
     });
     gateway.getApp().route('/', chatApi);
@@ -692,11 +683,7 @@ async function main() {
         return loadUsageSummary(resolve(ws.path, 'data'), { days });
       },
       getSkills: async () => {
-        return loadSkills({
-          workspacePath: ws.path,
-          globalSkillsDir: skillsConfig?.globalDir,
-          skillEntries: skillsConfig?.entries,
-        });
+        return loadSkills(ws.path);
       },
       generateWorkspaceCode: () => {
         return codeManager.generate(workspaceId);
@@ -804,8 +791,6 @@ async function main() {
       channelType: 'webchat',
       citationsEnabled: resolveCitations(config.memory, memProvider?.backendName ?? 'builtin'),
       memoryBackend: memProvider?.backendName,
-      globalSkillsDir: skillsConfig?.globalDir,
-      skillEntries: skillsConfig?.entries,
     });
 
     // Process stream events and forward to WebSocket
@@ -973,11 +958,7 @@ async function main() {
         return loadUsageSummary(resolve(ws.path, 'data'), { days });
       },
       getSkills: async () => {
-        return loadSkills({
-          workspacePath: ws.path,
-          globalSkillsDir: skillsConfig?.globalDir,
-          skillEntries: skillsConfig?.entries,
-        });
+        return loadSkills(ws.path);
       },
       generateWorkspaceCode: () => {
         return codeManager.generate(workspaceId);
@@ -1173,8 +1154,6 @@ async function main() {
       channelType: msg.channelType,
       citationsEnabled: resolveCitations(config.memory, memProviderForChannel?.backendName ?? 'builtin'),
       memoryBackend: memProviderForChannel?.backendName,
-      globalSkillsDir: skillsConfig?.globalDir,
-      skillEntries: skillsConfig?.entries,
     })) {
       if (event.type === 'done') {
         fullResponse = event.response;
@@ -1239,8 +1218,6 @@ async function main() {
       channelType: 'cron',
       citationsEnabled: resolveCitations(config.memory, cronMemProvider?.backendName ?? 'builtin'),
       memoryBackend: cronMemProvider?.backendName,
-      globalSkillsDir: skillsConfig?.globalDir,
-      skillEntries: skillsConfig?.entries,
     })) {
       // Consume stream
     }
@@ -1305,8 +1282,6 @@ async function main() {
       channelType: 'webhook',
       citationsEnabled: resolveCitations(config.memory, webhookMemProvider?.backendName ?? 'builtin'),
       memoryBackend: webhookMemProvider?.backendName,
-      globalSkillsDir: skillsConfig?.globalDir,
-      skillEntries: skillsConfig?.entries,
     })) {
       if (event.type === 'done') {
         response = event.response;

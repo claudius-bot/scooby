@@ -53,8 +53,6 @@ export interface AgentRunOptions {
   channelType?: string;
   citationsEnabled?: boolean;
   memoryBackend?: string;
-  globalSkillsDir?: string;
-  skillEntries?: Record<string, { apiKey?: string; env?: Record<string, string> }>;
 }
 
 const providerEnvKeys: Record<string, string> = {
@@ -86,11 +84,7 @@ export class AgentRunner {
 
   async *run(options: AgentRunOptions): AsyncGenerator<AgentStreamEvent> {
     const selector = new ModelSelector(this.cooldowns);
-    const skills = await loadSkills({
-      workspacePath: options.workspacePath,
-      globalSkillsDir: options.globalSkillsDir,
-      skillEntries: options.skillEntries,
-    });
+    const skills = await loadSkills(options.workspacePath);
 
     // Build system prompt
     const promptCtx: PromptContext = {
