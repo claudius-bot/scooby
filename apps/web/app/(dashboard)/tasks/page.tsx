@@ -14,7 +14,7 @@ import { useModal } from '@/components/modal/provider';
 import { ConfirmModal } from '@/components/modal/modals/confirm-modal';
 import { WorkspaceTaskGroup } from '@/features/tasks/components/workspace-task-group';
 import { TaskRow } from '@/features/tasks/components/task-row';
-import { TaskFormModal } from '@/features/tasks/components/task-form-modal';
+import { TaskFormModal, type ChannelBindingOption } from '@/features/tasks/components/task-form-modal';
 import { PillTabs, type PillTabItem } from '@/components/ui/pill-tabs';
 import { formatNumber, resolveAvatarUrl, getRelativeTime } from '@/lib/utils';
 import {
@@ -237,6 +237,15 @@ export default function TasksPage() {
     bindQ4.data,
   ]);
 
+  // Derive bindings map for workspace selector in modal
+  const bindingsMap = useMemo(() => {
+    const map = new Map<string, ChannelBindingOption[]>();
+    workspaceCronMap.forEach((v, wsId) => {
+      map.set(wsId, v.bindings);
+    });
+    return map;
+  }, [workspaceCronMap]);
+
   // Aggregate stats
   const allJobs = useMemo(() => {
     const jobs: (CronJob & { _wsId: string })[] = [];
@@ -325,50 +334,51 @@ export default function TasksPage() {
 
   const openCreateModal = useCallback(
     (workspaceId?: string) => {
-      const targetWsId = workspaceId ?? workspaces[0]?.id;
-      if (!targetWsId) return;
+      if (workspaces.length === 0) return;
 
-      const wsBindings = workspaceCronMap.get(targetWsId)?.bindings ?? [];
       modal.show(
         <TaskFormModal
           agents={agents}
-          bindings={wsBindings}
-          onSubmit={async (job) => {
+          workspaces={workspaces}
+          bindingsMap={bindingsMap}
+          defaultWorkspaceId={workspaceId ?? workspaces[0]?.id}
+          onSubmit={async (wsId, job) => {
             const payload = { ...job, source: job.source ?? 'config', enabled: job.enabled ?? true };
             await addCron.mutateAsync({
-              workspaceId: targetWsId,
+              workspaceId: wsId,
               job: payload as Parameters<typeof addCron.mutateAsync>[0]['job'],
             });
-            invalidate.cron(targetWsId);
+            invalidate.cron(wsId);
           }}
         />
       );
     },
-    [workspaces, workspaceCronMap, agents, modal, addCron, invalidate]
+    [workspaces, bindingsMap, agents, modal, addCron, invalidate]
   );
 
   const openEditModal = useCallback(
     (workspaceId: string, job: CronJob) => {
-      const wsBindings = workspaceCronMap.get(workspaceId)?.bindings ?? [];
       modal.show(
         <TaskFormModal
           job={job}
           agents={agents}
-          bindings={wsBindings}
-          onSubmit={async (updated) => {
+          workspaces={workspaces}
+          bindingsMap={bindingsMap}
+          defaultWorkspaceId={workspaceId}
+          onSubmit={async (wsId, updated) => {
             const payload = { ...updated, source: updated.source ?? 'config', enabled: updated.enabled ?? true };
             // Remove old and re-add with updated data
-            await removeCron.mutateAsync({ workspaceId, jobId: job.id });
+            await removeCron.mutateAsync({ workspaceId: wsId, jobId: job.id });
             await addCron.mutateAsync({
-              workspaceId,
+              workspaceId: wsId,
               job: payload as Parameters<typeof addCron.mutateAsync>[0]['job'],
             });
-            invalidate.cron(workspaceId);
+            invalidate.cron(wsId);
           }}
         />
       );
     },
-    [workspaceCronMap, agents, modal, addCron, removeCron, invalidate]
+    [workspaces, bindingsMap, agents, modal, addCron, removeCron, invalidate]
   );
 
   const handleToggleJob = useCallback(

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useId } from 'react';
+import { useState, useCallback, useId, useMemo } from 'react';
 import { Template } from '@/components/modal/template';
 import { useModal } from '@/components/modal/provider';
 import { Button } from '@/components/button';
@@ -20,7 +20,7 @@ import {
   Send,
   Check,
 } from 'lucide-react';
-import type { AgentDetail } from '@scooby/schemas';
+import type { AgentDetail, WorkspaceSummary } from '@scooby/schemas';
 import type { CronJob, CronSchedule } from './types';
 
 // ---------------------------------------------------------------------------
@@ -62,9 +62,13 @@ interface TaskFormModalProps {
   job?: CronJob;
   /** Available agents */
   agents?: AgentDetail[];
-  /** Known channel bindings for this workspace */
-  bindings?: ChannelBindingOption[];
-  onSubmit: (job: Omit<CronJob, 'state'>) => void | Promise<void>;
+  /** All workspaces the user can target */
+  workspaces?: WorkspaceSummary[];
+  /** Map from workspace ID → channel bindings */
+  bindingsMap?: Map<string, ChannelBindingOption[]>;
+  /** Default workspace to pre-select */
+  defaultWorkspaceId?: string;
+  onSubmit: (workspaceId: string, job: Omit<CronJob, 'state'>) => void | Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -165,16 +169,33 @@ const DEFAULT_FORM: TaskFormData = {
 // Component
 // ---------------------------------------------------------------------------
 
-export function TaskFormModal({ job, agents = [], bindings = [], onSubmit }: TaskFormModalProps) {
+export function TaskFormModal({
+  job,
+  agents = [],
+  workspaces = [],
+  bindingsMap = new Map(),
+  defaultWorkspaceId,
+  onSubmit,
+}: TaskFormModalProps) {
   const modal = useModal();
   const isEditing = !!job;
   const formId = useId();
 
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(
+    () => defaultWorkspaceId ?? workspaces[0]?.id ?? ''
+  );
+
+  const currentBindings = useMemo(
+    () => bindingsMap.get(selectedWorkspaceId) ?? [],
+    [bindingsMap, selectedWorkspaceId]
+  );
+
   const [form, setForm] = useState<TaskFormData>(() => {
     const initial = job ? formFromJob(job) : { ...DEFAULT_FORM };
+    const initBindings = bindingsMap.get(selectedWorkspaceId) ?? [];
     // Auto-select the first binding if available and no selection set
-    if (!initial.deliverySelection && bindings.length > 0) {
-      initial.deliverySelection = `${bindings[0].channelType}:${bindings[0].conversationId}`;
+    if (!initial.deliverySelection && initBindings.length > 0) {
+      initial.deliverySelection = `${initBindings[0].channelType}:${initBindings[0].conversationId}`;
     } else if (!initial.deliverySelection) {
       initial.deliverySelection = '__custom__';
     }
@@ -189,9 +210,25 @@ export function TaskFormModal({ job, agents = [], bindings = [], onSubmit }: Tas
     []
   );
 
+  const handleWorkspaceChange = useCallback(
+    (wsId: string) => {
+      setSelectedWorkspaceId(wsId);
+      const newBindings = bindingsMap.get(wsId) ?? [];
+      setForm((prev) => ({
+        ...prev,
+        deliverySelection:
+          newBindings.length > 0
+            ? `${newBindings[0].channelType}:${newBindings[0].conversationId}`
+            : '__custom__',
+      }));
+    },
+    [bindingsMap]
+  );
+
   const isCustomDelivery = form.deliverySelection === '__custom__';
 
   const canSubmit =
+    selectedWorkspaceId.length > 0 &&
     form.prompt.trim().length > 0 &&
     ((form.scheduleKind === 'every' && form.interval.trim().length > 0) ||
       (form.scheduleKind === 'daily' && form.time.trim().length > 0) ||
@@ -233,7 +270,7 @@ export function TaskFormModal({ job, agents = [], bindings = [], onSubmit }: Tas
     };
 
     try {
-      await onSubmit(result);
+      await onSubmit(selectedWorkspaceId, result);
       modal.hide();
     } catch {
       // Let caller handle toast/errors
@@ -265,6 +302,29 @@ export function TaskFormModal({ job, agents = [], bindings = [], onSubmit }: Tas
       }
     >
       <div className="space-y-5">
+        {/* ── Workspace ──────────────────────────── */}
+        {workspaces.length > 0 && (
+          <FieldGroup label="Workspace" hint="Which workspace owns this task?">
+            <select
+              value={selectedWorkspaceId}
+              onChange={(e) => handleWorkspaceChange(e.target.value)}
+              disabled={isEditing}
+              className={cn(
+                'flex h-9 w-full rounded-md border border-neutral-200 bg-white px-3 py-1',
+                'text-sm text-neutral-900',
+                'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-neutral-400',
+                isEditing && 'opacity-60 cursor-not-allowed',
+              )}
+            >
+              {workspaces.map((ws) => (
+                <option key={ws.id} value={ws.id}>
+                  {ws.agent.emoji} {ws.agent.name}
+                </option>
+              ))}
+            </select>
+          </FieldGroup>
+        )}
+
         {/* ── Name ────────────────────────────────── */}
         <FieldGroup label="Name" hint="Optional display name">
           <Input
@@ -446,7 +506,7 @@ export function TaskFormModal({ job, agents = [], bindings = [], onSubmit }: Tas
 
           {form.deliveryEnabled && (
             <div className="space-y-3">
-              {bindings.length > 0 && (
+              {currentBindings.length > 0 && (
                 <FieldGroup label="Deliver to" hint="Select a connected channel">
                   <select
                     value={form.deliverySelection}
@@ -457,7 +517,7 @@ export function TaskFormModal({ job, agents = [], bindings = [], onSubmit }: Tas
                       'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-neutral-400',
                     )}
                   >
-                    {bindings.map((b) => (
+                    {currentBindings.map((b) => (
                       <option key={`${b.channelType}:${b.conversationId}`} value={`${b.channelType}:${b.conversationId}`}>
                         {b.channelType} — {b.conversationId}
                       </option>
@@ -467,7 +527,7 @@ export function TaskFormModal({ job, agents = [], bindings = [], onSubmit }: Tas
                 </FieldGroup>
               )}
 
-              {(bindings.length === 0 || isCustomDelivery) && (
+              {(currentBindings.length === 0 || isCustomDelivery) && (
                 <>
                   <FieldGroup label="Channel" hint="Where to deliver results">
                     <select
