@@ -2,15 +2,7 @@
 
 import type { AgentDetail } from '@scooby/schemas';
 import { Avatar } from '@/components/avatar';
-import { cn } from '@/lib/utils';
-import { getGatewayUrl } from '@/lib/gateway-config';
-
-function resolveAvatarUrl(path: string | undefined | null): string | undefined {
-  if (!path) return undefined;
-  if (path.startsWith('http')) return path;
-  const base = getGatewayUrl();
-  return base ? `${base}${path}` : undefined;
-}
+import { cn, resolveAvatarUrl } from '@/lib/utils';
 
 interface AgentCardProps {
   agent: AgentDetail;

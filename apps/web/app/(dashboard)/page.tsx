@@ -16,23 +16,16 @@ import {
   formatModelName,
   formatCurrency,
   getProviderLogo,
+  resolveAvatarUrl,
+  getRelativeTime,
 } from '@/lib/utils';
 import { Button } from '@/components/button';
 import Link from 'next/link';
 import { Avatar } from '@/components/avatar';
-import { getGatewayUrl } from '@/lib/gateway-config';
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
-
-/** Resolve a gateway-relative avatar path (e.g. `/api/agents/scooby/avatar`) to a full URL. */
-function resolveAvatarUrl(path: string | undefined | null): string | undefined {
-  if (!path) return undefined;
-  if (path.startsWith('http')) return path;
-  const base = getGatewayUrl();
-  return base ? `${base}${path}` : undefined;
-}
 
 const TIME_RANGES: readonly TimeRange[] = [
   { id: '1d', label: 'Last 24h', days: 1 },
@@ -98,24 +91,6 @@ function SessionCard({ session }: { session: SessionMetadata }) {
       </div>
     </div>
   );
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function getRelativeTime(dateStr: string): string {
-  const now = Date.now();
-  const then = new Date(dateStr).getTime();
-  const diffMs = now - then;
-  const diffSec = Math.floor(diffMs / 1000);
-  if (diffSec < 60) return 'just now';
-  const diffMin = Math.floor(diffSec / 60);
-  if (diffMin < 60) return `${diffMin}m ago`;
-  const diffHr = Math.floor(diffMin / 60);
-  if (diffHr < 24) return `${diffHr}h ago`;
-  const diffDay = Math.floor(diffHr / 24);
-  return `${diffDay}d ago`;
 }
 
 // ---------------------------------------------------------------------------

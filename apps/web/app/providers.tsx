@@ -7,6 +7,7 @@ import { GatewaySetupModal } from '../components/gateway-setup-modal';
 import { NuqsAdapter } from 'nuqs/adapters/next/app';
 import { Toaster } from '../components/ui/sonner';
 import * as TooltipPrimitive from '@radix-ui/react-tooltip';
+import { ModalProvider } from '@/components/modal/provider';
 
 export function Providers({ children }: { children: ReactNode }) {
   const [gatewayUrl, setGatewayUrl] = useState<string | null | undefined>(undefined);
@@ -27,8 +28,10 @@ export function Providers({ children }: { children: ReactNode }) {
     <GatewayProvider config={{ baseUrl: gatewayUrl }}>
       <NuqsAdapter>
         <TooltipPrimitive.Provider delayDuration={150}>
-          {children}
-          <Toaster position="bottom-right" />
+          <ModalProvider>
+            {children}
+            <Toaster position="bottom-right" />
+          </ModalProvider>
         </TooltipPrimitive.Provider>
       </NuqsAdapter>
     </GatewayProvider>

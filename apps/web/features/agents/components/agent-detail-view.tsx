@@ -3,8 +3,7 @@
 import { useState, useEffect } from 'react';
 import type { AgentDetail, ToolSummary } from '@scooby/schemas';
 import { useGateway, useInvalidate } from '@scooby/api-client/react';
-import { cn, formatModelName } from '@/lib/utils';
-import { getGatewayUrl } from '@/lib/gateway-config';
+import { cn, formatModelName, resolveAvatarUrl } from '@/lib/utils';
 import { Avatar } from '@/components/avatar';
 import { AgentFileEditor } from './agent-file-editor';
 import { ToolPicker } from './tool-picker';
@@ -12,13 +11,6 @@ import { ModelPicker } from './model-picker';
 import { Switch } from '@/components/ui/switch';
 import { toast } from '@/components/ui/sonner';
 import { Wrench, Globe, Save, Scroll, User, Cpu, Settings } from 'lucide-react';
-
-function resolveAvatarUrl(path: string | undefined | null): string | undefined {
-  if (!path) return undefined;
-  if (path.startsWith('http')) return path;
-  const base = getGatewayUrl();
-  return base ? `${base}${path}` : undefined;
-}
 
 // ---------------------------------------------------------------------------
 // Tab navigation

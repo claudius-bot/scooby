@@ -2,7 +2,7 @@
 
 import type { AgentDetail } from '@scooby/schemas';
 import { Avatar } from '@/components/avatar';
-import { getGatewayUrl } from '@/lib/gateway-config';
+import { resolveAvatarUrl } from '@/lib/utils';
 
 interface ChatEmptyStateProps {
   agent?: AgentDetail | null;
@@ -14,13 +14,6 @@ const DEFAULT_SUGGESTIONS = [
   'Summarize recent activity',
   'What tools do you have access to?',
 ];
-
-function resolveAvatarUrl(path: string | undefined | null): string | undefined {
-  if (!path) return undefined;
-  if (path.startsWith('http')) return path;
-  const base = getGatewayUrl();
-  return base ? `${base}${path}` : undefined;
-}
 
 export function ChatEmptyState({ agent, onSuggestionClick }: ChatEmptyStateProps) {
   const name = agent?.name ?? 'Assistant';

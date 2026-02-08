@@ -2,9 +2,8 @@
 
 import { useState, useRef, useCallback, type KeyboardEvent } from 'react';
 import { ArrowUp, Square, Paperclip, Volume2, VolumeX, Sparkles, X } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { cn, resolveAvatarUrl } from '@/lib/utils';
 import { Avatar } from '@/components/avatar';
-import { getGatewayUrl } from '@/lib/gateway-config';
 import type { AgentDetail } from '@scooby/schemas';
 import type { ChatMessageAgent } from '@/hooks/useChatSession';
 import {
@@ -15,15 +14,6 @@ import {
   CommandGroup,
   CommandItem,
 } from '@/components/ui/command';
-
-// ── Helpers ─────────────────────────────────────────────────────────────
-
-function resolveAvatarUrl(path: string | undefined | null): string | undefined {
-  if (!path) return undefined;
-  if (path.startsWith('http')) return path;
-  const base = getGatewayUrl();
-  return base ? `${base}${path}` : undefined;
-}
 
 // ── Agent Selector ──────────────────────────────────────────────────────
 

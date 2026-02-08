@@ -2,18 +2,11 @@
 
 import type { ChatMessage as ChatMessageType } from '@/hooks/useChatSession';
 import { Avatar } from '@/components/avatar';
-import { getGatewayUrl } from '@/lib/gateway-config';
+import { resolveAvatarUrl } from '@/lib/utils';
 import { MarkdownRenderer } from './markdown-renderer';
 import { ToolCallCard } from './tool-call-card-v2';
 import { BouncingDots, BlinkingCursor } from './streaming-cursor';
 import { Brain, Paperclip } from 'lucide-react';
-
-function resolveAvatarUrl(path: string | undefined | null): string | undefined {
-  if (!path) return undefined;
-  if (path.startsWith('http')) return path;
-  const base = getGatewayUrl();
-  return base ? `${base}${path}` : undefined;
-}
 
 interface ChatMessageProps {
   message: ChatMessageType;

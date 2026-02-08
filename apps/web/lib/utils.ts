@@ -1,5 +1,6 @@
 import { type ClassValue, clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { getGatewayUrl } from './gateway-config';
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -314,4 +315,40 @@ export function formatModelName(model: string): string {
     .replace(/\b\w/g, (c) => c.toUpperCase())
     .replace(/(\d+)([a-z])/gi, '$1 $2') // Add space between numbers and letters
     .trim();
+}
+
+/**
+ * Resolve a gateway-relative avatar path (e.g. `/api/agents/scooby/avatar`) to a full URL.
+ */
+export function resolveAvatarUrl(path: string | undefined | null): string | undefined {
+  if (!path) return undefined;
+  if (path.startsWith('http')) return path;
+  const base = getGatewayUrl();
+  return base ? `${base}${path}` : undefined;
+}
+
+/**
+ * Format a date string as a human-readable relative time (e.g. "5m ago", "in 2h").
+ */
+export function getRelativeTime(dateStr: string): string {
+  const now = Date.now();
+  const then = new Date(dateStr).getTime();
+  const diffMs = now - then;
+  if (diffMs < 0) {
+    const futureSec = Math.floor(Math.abs(diffMs) / 1000);
+    if (futureSec < 60) return `in ${futureSec}s`;
+    const futureMin = Math.floor(futureSec / 60);
+    if (futureMin < 60) return `in ${futureMin}m`;
+    const futureHr = Math.floor(futureMin / 60);
+    if (futureHr < 24) return `in ${futureHr}h`;
+    return `in ${Math.floor(futureHr / 24)}d`;
+  }
+  const diffSec = Math.floor(diffMs / 1000);
+  if (diffSec < 60) return 'just now';
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ago`;
+  const diffDay = Math.floor(diffHr / 24);
+  return `${diffDay}d ago`;
 }
