@@ -139,6 +139,16 @@ export const useGateway = {
       (p) => ['agents', p.id],
       (c, p) => c.agents.get(p.id),
     ),
+    files: qParam<{ id: string }, ClientReturn<'agents', 'files'>>(
+      (p) => ['agents', p.id, 'files'],
+      (c, p) => c.agents.files(p.id),
+    ),
+    update: m<ClientReturn<'agents', 'update'>, { id: string; updates: Record<string, unknown> }>(
+      (c, input) => c.agents.update(input.id, input.updates),
+    ),
+    updateFile: m<ClientReturn<'agents', 'updateFile'>, { id: string; fileName: string; content: string }>(
+      (c, input) => c.agents.updateFile(input.id, input.fileName, input.content),
+    ),
   },
 
   // ── Tools ────────────────────────────────────────────────────────
@@ -259,6 +269,8 @@ export function useInvalidate() {
     workspace: (id: string) => qc.invalidateQueries({ queryKey: ['workspaces', id] }),
     sessions: (workspaceId: string) => qc.invalidateQueries({ queryKey: ['workspaces', workspaceId, 'sessions'] }),
     agents: () => qc.invalidateQueries({ queryKey: ['agents'] }),
+    agent: (id: string) => qc.invalidateQueries({ queryKey: ['agents', id] }),
+    agentFiles: (id: string) => qc.invalidateQueries({ queryKey: ['agents', id, 'files'] }),
     tools: () => qc.invalidateQueries({ queryKey: ['tools'] }),
     cron: (workspaceId: string) => qc.invalidateQueries({ queryKey: ['workspaces', workspaceId, 'cron'] }),
     memory: (workspaceId: string) => qc.invalidateQueries({ queryKey: ['workspaces', workspaceId, 'memory'] }),
@@ -275,6 +287,7 @@ export const gatewayKeys = {
   agents: {
     all: () => ['agents'] as const,
     detail: (id: string) => ['agents', id] as const,
+    files: (id: string) => ['agents', id, 'files'] as const,
   },
   tools: { all: () => ['tools'] as const },
   workspaces: {

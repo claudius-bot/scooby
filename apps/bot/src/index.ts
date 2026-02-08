@@ -807,6 +807,57 @@ async function main() {
         }
       },
 
+      getAgentFiles: async (id: string) => {
+        const a = agentRegistry.get(id);
+        if (!a) return null;
+        return { identity: a.identity, soul: a.soul, tools: a.tools };
+      },
+
+      updateAgent: async (id: string, updates: Record<string, unknown>) => {
+        const { AgentUpdateSchema } = await import('@scooby/schemas');
+        const parsed = AgentUpdateSchema.parse(updates);
+        const a = agentRegistry.get(id);
+        if (!a) throw new Error(`Agent not found: ${id}`);
+
+        // Read current agent.json, merge updates, write back
+        const agentJsonPath = join(agentsDir, id, 'agent.json');
+        const raw = await readFile(agentJsonPath, 'utf-8');
+        const current = JSON.parse(raw);
+        if (parsed.name !== undefined) current.name = parsed.name;
+        if (parsed.emoji !== undefined) current.emoji = parsed.emoji;
+        if (parsed.about !== undefined) current.about = parsed.about;
+        if (parsed.model !== undefined) current.model = parsed.model;
+        if (parsed.fallbackModel !== undefined) current.fallbackModel = parsed.fallbackModel;
+        if (parsed.tools !== undefined) current.tools = parsed.tools;
+        if (parsed.skills !== undefined) current.skills = parsed.skills;
+        if (parsed.universal !== undefined) current.universal = parsed.universal;
+        await writeFile(agentJsonPath, JSON.stringify(current, null, 2), 'utf-8');
+
+        // Sync in-memory state
+        agentRegistry.update(id, parsed);
+        return { ok: true };
+      },
+
+      updateAgentFile: async (id: string, fileName: string, content: string) => {
+        const allowedFiles: Record<string, string> = {
+          identity: 'IDENTITY.md',
+          soul: 'SOUL.md',
+          tools: 'TOOLS.md',
+        };
+        const diskName = allowedFiles[fileName];
+        if (!diskName) throw new Error(`Invalid file name: ${fileName}`);
+
+        const a = agentRegistry.get(id);
+        if (!a) throw new Error(`Agent not found: ${id}`);
+
+        const filePath = join(agentsDir, id, diskName);
+        await writeFile(filePath, content, 'utf-8');
+
+        // Sync in-memory state
+        agentRegistry.updateFile(id, fileName as 'identity' | 'soul' | 'tools', content);
+        return { ok: true };
+      },
+
       getWorkspaceDetail: async (id: string) => {
         const ws = workspaces.get(id);
         if (!ws) return null;

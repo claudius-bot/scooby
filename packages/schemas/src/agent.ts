@@ -48,3 +48,22 @@ export const AgentDetailSchema = z.object({
 });
 
 export type AgentDetail = z.infer<typeof AgentDetailSchema>;
+
+export const AgentFilesSchema = z.object({
+  identity: z.string(),
+  soul: z.string(),
+  tools: z.string(),
+});
+export type AgentFiles = z.infer<typeof AgentFilesSchema>;
+
+export const AgentUpdateSchema = z.object({
+  name: z.string().optional(),
+  emoji: z.string().optional(),
+  about: z.string().optional(),
+  model: z.string().optional(),
+  fallbackModel: z.string().nullable().optional(),
+  tools: z.array(z.string()).optional(),
+  skills: z.array(z.string()).optional(),
+  universal: z.boolean().optional(),
+});
+export type AgentUpdate = z.infer<typeof AgentUpdateSchema>;

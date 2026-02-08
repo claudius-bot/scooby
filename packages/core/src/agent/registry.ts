@@ -76,4 +76,50 @@ export class AgentRegistry implements AgentRegistryRef {
     }
     return undefined;
   }
+
+  /**
+   * Update in-memory agent profile fields.
+   */
+  update(id: string, updates: {
+    name?: string;
+    emoji?: string;
+    about?: string;
+    model?: string;
+    fallbackModel?: string | null;
+    tools?: string[];
+    skills?: string[];
+    universal?: boolean;
+  }): boolean {
+    const profile = this.agents.get(id);
+    if (!profile) return false;
+
+    const oldEmoji = profile.emoji;
+
+    if (updates.name !== undefined) profile.name = updates.name;
+    if (updates.emoji !== undefined) profile.emoji = updates.emoji;
+    if (updates.about !== undefined) profile.about = updates.about;
+    if (updates.model !== undefined) profile.modelRef = updates.model;
+    if (updates.fallbackModel !== undefined) profile.fallbackModelRef = updates.fallbackModel ?? undefined;
+    if (updates.tools !== undefined) profile.allowedTools = updates.tools;
+    if (updates.skills !== undefined) profile.skillNames = updates.skills;
+    if (updates.universal !== undefined) profile.universalTools = updates.universal;
+
+    // Rebuild emoji index if emoji changed
+    if (updates.emoji !== undefined && updates.emoji !== oldEmoji) {
+      if (oldEmoji) this.emojiIndex.delete(oldEmoji);
+      if (updates.emoji) this.emojiIndex.set(updates.emoji, id);
+    }
+
+    return true;
+  }
+
+  /**
+   * Update in-memory markdown content for a file key.
+   */
+  updateFile(id: string, fileKey: 'identity' | 'soul' | 'tools', content: string): boolean {
+    const profile = this.agents.get(id);
+    if (!profile) return false;
+    profile[fileKey] = content;
+    return true;
+  }
 }

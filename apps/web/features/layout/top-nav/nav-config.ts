@@ -1,7 +1,7 @@
 import {
   LayoutDashboard,
   MessageSquare,
-  MessagesSquare,
+  HatGlasses,
   ListChecks,
   Zap,
   Settings,
@@ -27,7 +27,7 @@ export interface NavItem {
 // Primary navigation - most used
 export const navigation: NavItem[] = [
   { name: 'Dashboard', href: '/', icon: LayoutDashboard },
-  { name: 'Agents', href: '/agents', icon: MessagesSquare },
+  { name: 'Agents', href: '/agents', icon: HatGlasses },
   { name: 'Chat', href: '/chat', icon: MessageSquare },
   { name: 'Tasks', href: '/tasks', icon: ListChecks },
 ];

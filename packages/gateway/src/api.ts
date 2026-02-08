@@ -27,6 +27,11 @@ export interface ApiContext {
   getSession?: (workspaceId: string, sessionId: string) => Promise<any | null>;
   getSystemStatus?: () => Promise<any>;
 
+  // Agent read/write callbacks
+  getAgentFiles?: (id: string) => Promise<{ identity: string; soul: string; tools: string } | null>;
+  updateAgent?: (id: string, updates: Record<string, unknown>) => Promise<{ ok: boolean }>;
+  updateAgentFile?: (id: string, fileName: string, content: string) => Promise<{ ok: boolean }>;
+
   // Write callbacks
   updateWorkspaceConfig?: (workspaceId: string, updates: Record<string, unknown>) => Promise<{ ok: boolean }>;
   writeWorkspaceFile?: (workspaceId: string, filePath: string, content: string) => Promise<{ ok: boolean }>;
@@ -125,6 +130,30 @@ export function createApi(ctx: ApiContext) {
     c.header('Content-Type', result.contentType);
     c.header('Cache-Control', 'public, max-age=3600');
     return c.body(result.data);
+  });
+
+  // GET /api/agents/:id/files
+  app.get('/agents/:id/files', async (c) => {
+    if (!ctx.getAgentFiles) return c.json({ error: 'Not implemented' }, 404);
+    const files = await ctx.getAgentFiles(c.req.param('id'));
+    if (!files) throw new HTTPException(404, { message: 'Agent not found' });
+    return c.json(files);
+  });
+
+  // PATCH /api/agents/:id
+  app.patch('/agents/:id', async (c) => {
+    if (!ctx.updateAgent) return c.json({ error: 'Not implemented' }, 404);
+    const body = await c.req.json();
+    const result = await ctx.updateAgent(c.req.param('id'), body);
+    return c.json(result);
+  });
+
+  // PUT /api/agents/:id/files/:fileName
+  app.put('/agents/:id/files/:fileName', async (c) => {
+    if (!ctx.updateAgentFile) return c.json({ error: 'Not implemented' }, 404);
+    const { content } = await c.req.json();
+    const result = await ctx.updateAgentFile(c.req.param('id'), c.req.param('fileName'), content);
+    return c.json(result);
   });
 
   // GET /api/tools

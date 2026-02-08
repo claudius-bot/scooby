@@ -3,6 +3,7 @@ import {
   WorkspaceSummarySchema,
   WorkspaceDetailSchema,
   AgentDetailSchema,
+  AgentFilesSchema,
   SessionMetadataSchema,
   TranscriptEntrySchema,
   ToolSummarySchema,
@@ -14,6 +15,7 @@ import {
   type WorkspaceSummary,
   type WorkspaceDetail,
   type AgentDetail,
+  type AgentFiles,
   type SessionMetadata,
   type TranscriptEntry,
   type ToolSummary,
@@ -136,6 +138,11 @@ export function createGatewayClient(config: GatewayClientConfig) {
     agents: {
       list: () => get('/api/agents', AgentsResponseSchema).then(r => r.agents),
       get: (id: string) => get(`/api/agents/${encodeURIComponent(id)}`, AgentDetailSchema),
+      files: (id: string) => get(`/api/agents/${encodeURIComponent(id)}/files`, AgentFilesSchema),
+      update: (id: string, updates: Record<string, unknown>) =>
+        patch(`/api/agents/${encodeURIComponent(id)}`, OkResponseSchema, updates),
+      updateFile: (id: string, fileName: string, content: string) =>
+        put(`/api/agents/${encodeURIComponent(id)}/files/${encodeURIComponent(fileName)}`, OkResponseSchema, { content }),
     },
 
     // ── Tools ──────────────────────────────────────────────────────
