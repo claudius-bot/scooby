@@ -22,6 +22,7 @@ export interface CronSchedule {
 export interface CronJob {
   id: string;
   name?: string;
+  agentId?: string;
   schedule: CronSchedule;
   prompt: string;
   enabled?: boolean;

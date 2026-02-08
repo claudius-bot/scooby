@@ -3,6 +3,7 @@
 import { useState, useMemo, useCallback } from 'react';
 import { useGateway, useInvalidate } from '@scooby/api-client/react';
 import type { WorkspaceSummary } from '@scooby/schemas';
+import type { AgentDetail } from '@scooby/schemas';
 import type { CronJob, CronRun } from '@/features/tasks/components/types';
 import { TitleActionHeader } from '@/components/title-action-header';
 import { HeroStats } from '@/features/dashboard/components/hero-stats';
@@ -156,6 +157,7 @@ export default function TasksPage() {
   const [viewMode, setViewMode] = useState<ViewMode>('grouped');
 
   const { data: workspaces = [], isLoading: wsLoading } = useGateway.workspaces.list();
+  const { data: agents = [] } = useGateway.agents.list();
   const invalidate = useInvalidate();
   const modal = useModal();
   const addCron = useGateway.cron.add();
@@ -329,6 +331,7 @@ export default function TasksPage() {
       const wsBindings = workspaceCronMap.get(targetWsId)?.bindings ?? [];
       modal.show(
         <TaskFormModal
+          agents={agents}
           bindings={wsBindings}
           onSubmit={async (job) => {
             const payload = { ...job, source: job.source ?? 'config', enabled: job.enabled ?? true };
@@ -341,7 +344,7 @@ export default function TasksPage() {
         />
       );
     },
-    [workspaces, workspaceCronMap, modal, addCron, invalidate]
+    [workspaces, workspaceCronMap, agents, modal, addCron, invalidate]
   );
 
   const openEditModal = useCallback(
@@ -350,6 +353,7 @@ export default function TasksPage() {
       modal.show(
         <TaskFormModal
           job={job}
+          agents={agents}
           bindings={wsBindings}
           onSubmit={async (updated) => {
             const payload = { ...updated, source: updated.source ?? 'config', enabled: updated.enabled ?? true };
@@ -364,7 +368,7 @@ export default function TasksPage() {
         />
       );
     },
-    [workspaceCronMap, modal, addCron, removeCron, invalidate]
+    [workspaceCronMap, agents, modal, addCron, removeCron, invalidate]
   );
 
   const handleToggleJob = useCallback(
@@ -540,6 +544,7 @@ export default function TasksPage() {
                   workspace={workspace}
                   jobs={jobs}
                   history={history}
+                  agents={agents}
                   onToggleJob={handleToggleJob}
                   onRemoveJob={handleRemoveJob}
                   onEditJob={openEditModal}
@@ -559,21 +564,24 @@ export default function TasksPage() {
                   <div className="w-16 shrink-0" />
                 </div>
                 {filteredWorkspaces.flatMap(({ workspace, jobs, history }) =>
-                  jobs.map((job) => (
-                    <TaskRow
-                      key={job.id}
-                      entry={job}
-                      workspaceId={workspace.id}
-                      agentName={workspace.agent.name}
-                      agentAvatar={resolveAvatarUrl(workspace.agent.avatar)}
-                      history={history}
-                      onToggle={(jobId: string, enabled: boolean) =>
-                        handleToggleJob(workspace.id, jobId, enabled)
-                      }
-                      onRemove={(jobId: string) => handleRemoveJob(workspace.id, jobId)}
-                      onEdit={(j) => openEditModal(workspace.id, j)}
-                    />
-                  ))
+                  jobs.map((job) => {
+                    const jobAgent = job.agentId ? agents.find((a) => a.id === job.agentId) : undefined;
+                    return (
+                      <TaskRow
+                        key={job.id}
+                        entry={job}
+                        workspaceId={workspace.id}
+                        agentName={jobAgent?.name ?? workspace.agent.name}
+                        agentAvatar={resolveAvatarUrl(jobAgent?.avatar ?? workspace.agent.avatar)}
+                        history={history}
+                        onToggle={(jobId: string, enabled: boolean) =>
+                          handleToggleJob(workspace.id, jobId, enabled)
+                        }
+                        onRemove={(jobId: string) => handleRemoveJob(workspace.id, jobId)}
+                        onEdit={(j) => openEditModal(workspace.id, j)}
+                      />
+                    );
+                  })
                 )}
               </div>
             )}

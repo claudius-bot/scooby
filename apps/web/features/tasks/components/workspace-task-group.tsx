@@ -1,6 +1,6 @@
 'use client';
 
-import type { WorkspaceSummary } from '@scooby/schemas';
+import type { WorkspaceSummary, AgentDetail } from '@scooby/schemas';
 import type { CronJob, CronRun } from './types';
 import { TaskRow } from './task-row';
 import { ChevronDown, ChevronRight, FolderCog } from 'lucide-react';
@@ -12,6 +12,7 @@ interface WorkspaceTaskGroupProps {
   workspace: WorkspaceSummary;
   jobs: CronJob[];
   history: CronRun[];
+  agents?: AgentDetail[];
   onToggleJob?: (workspaceId: string, jobId: string, enabled: boolean) => void;
   onRemoveJob?: (workspaceId: string, jobId: string) => void;
   onEditJob?: (workspaceId: string, job: CronJob) => void;
@@ -21,6 +22,7 @@ export function WorkspaceTaskGroup({
   workspace,
   jobs,
   history,
+  agents = [],
   onToggleJob,
   onRemoveJob,
   onEditJob,
@@ -78,19 +80,22 @@ export function WorkspaceTaskGroup({
               No tasks configured for this workspace
             </div>
           ) : (
-            jobs.map((job) => (
-              <TaskRow
-                key={job.id}
-                entry={job}
-                workspaceId={workspace.id}
-                agentName={workspace.agent.name}
-                agentAvatar={resolveAvatarUrl(workspace.agent.avatar)}
-                history={history}
-                onToggle={(jobId, enabled) => onToggleJob?.(workspace.id, jobId, enabled)}
-                onRemove={(jobId) => onRemoveJob?.(workspace.id, jobId)}
-                onEdit={(j) => onEditJob?.(workspace.id, j)}
-              />
-            ))
+            jobs.map((job) => {
+              const jobAgent = job.agentId ? agents.find((a) => a.id === job.agentId) : undefined;
+              return (
+                <TaskRow
+                  key={job.id}
+                  entry={job}
+                  workspaceId={workspace.id}
+                  agentName={jobAgent?.name ?? workspace.agent.name}
+                  agentAvatar={resolveAvatarUrl(jobAgent?.avatar ?? workspace.agent.avatar)}
+                  history={history}
+                  onToggle={(jobId, enabled) => onToggleJob?.(workspace.id, jobId, enabled)}
+                  onRemove={(jobId) => onRemoveJob?.(workspace.id, jobId)}
+                  onEdit={(j) => onEditJob?.(workspace.id, j)}
+                />
+              );
+            })
           )}
         </div>
       )}

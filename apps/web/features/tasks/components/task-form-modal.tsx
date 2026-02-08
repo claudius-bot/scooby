@@ -7,7 +7,8 @@ import { Button } from '@/components/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
-import { cn } from '@/lib/utils';
+import { Avatar } from '@/components/avatar';
+import { cn, resolveAvatarUrl } from '@/lib/utils';
 import {
   CalendarClock,
   Clock,
@@ -17,7 +18,9 @@ import {
   Sparkles,
   Pencil,
   Send,
+  Check,
 } from 'lucide-react';
+import type { AgentDetail } from '@scooby/schemas';
 import type { CronJob, CronSchedule } from './types';
 
 // ---------------------------------------------------------------------------
@@ -29,6 +32,7 @@ type ScheduleKind = CronSchedule['kind'];
 interface TaskFormData {
   name: string;
   prompt: string;
+  agentId: string;
   enabled: boolean;
   scheduleKind: ScheduleKind;
   // "every" fields
@@ -56,6 +60,8 @@ export interface ChannelBindingOption {
 interface TaskFormModalProps {
   /** Pre-fill for editing */
   job?: CronJob;
+  /** Available agents */
+  agents?: AgentDetail[];
   /** Known channel bindings for this workspace */
   bindings?: ChannelBindingOption[];
   onSubmit: (job: Omit<CronJob, 'state'>) => void | Promise<void>;
@@ -123,6 +129,7 @@ function formFromJob(job: CronJob): TaskFormData {
   return {
     name: job.name ?? '',
     prompt: job.prompt,
+    agentId: job.agentId ?? '',
     enabled: job.enabled !== false,
     scheduleKind: job.schedule.kind,
     interval: job.schedule.interval ?? '1h',
@@ -141,6 +148,7 @@ function formFromJob(job: CronJob): TaskFormData {
 const DEFAULT_FORM: TaskFormData = {
   name: '',
   prompt: '',
+  agentId: '',
   enabled: true,
   scheduleKind: 'every',
   interval: '1h',
@@ -157,7 +165,7 @@ const DEFAULT_FORM: TaskFormData = {
 // Component
 // ---------------------------------------------------------------------------
 
-export function TaskFormModal({ job, bindings = [], onSubmit }: TaskFormModalProps) {
+export function TaskFormModal({ job, agents = [], bindings = [], onSubmit }: TaskFormModalProps) {
   const modal = useModal();
   const isEditing = !!job;
   const formId = useId();
@@ -215,6 +223,7 @@ export function TaskFormModal({ job, bindings = [], onSubmit }: TaskFormModalPro
     const result: Omit<CronJob, 'state'> = {
       id: job?.id ?? generateId(),
       name: form.name.trim() || undefined,
+      agentId: form.agentId || undefined,
       prompt: form.prompt.trim(),
       enabled: form.enabled,
       schedule: buildSchedule(form),
@@ -265,6 +274,52 @@ export function TaskFormModal({ job, bindings = [], onSubmit }: TaskFormModalPro
             onChange={(e) => update('name', e.target.value)}
           />
         </FieldGroup>
+
+        {/* ── Agent ──────────────────────────────── */}
+        {agents.length > 0 && (
+          <FieldGroup label="Agent" hint="Which agent runs this task?">
+            <div className="grid grid-cols-2 gap-2">
+              {agents.map((agent) => {
+                const active = form.agentId === agent.id;
+                const avatarUrl = resolveAvatarUrl(agent.avatar);
+                return (
+                  <button
+                    key={agent.id}
+                    type="button"
+                    onClick={() => update('agentId', agent.id)}
+                    className={cn(
+                      'group relative flex items-center gap-2.5 rounded-lg border p-3 text-left transition-all',
+                      active
+                        ? 'border-neutral-900 bg-neutral-900 text-white shadow-sm'
+                        : 'border-neutral-200 bg-white text-neutral-600 hover:border-neutral-300 hover:bg-neutral-50'
+                    )}
+                  >
+                    {avatarUrl ? (
+                      <Avatar
+                        src={avatarUrl}
+                        name={agent.name}
+                        className="size-6 shrink-0 rounded-full"
+                      />
+                    ) : (
+                      <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-neutral-100 text-sm">
+                        {agent.emoji}
+                      </span>
+                    )}
+                    <span className={cn(
+                      'text-[13px] font-medium truncate',
+                      active && 'text-white'
+                    )}>
+                      {agent.name}
+                    </span>
+                    {active && (
+                      <Check className="ml-auto h-3.5 w-3.5 shrink-0 text-neutral-400" />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </FieldGroup>
+        )}
 
         {/* ── Prompt ──────────────────────────────── */}
         <FieldGroup label="Prompt" hint="What should the agent do?">

@@ -72,6 +72,7 @@ export type CronJobState = z.infer<typeof CronJobStateSchema>;
 export const WorkspaceCronEntrySchema = z.object({
   id: z.string(),
   name: z.string().optional(),
+  agentId: z.string().optional(),
   schedule: CronScheduleSchema,
   prompt: z.string(),
   enabled: z.boolean().default(true),

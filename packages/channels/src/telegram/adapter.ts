@@ -14,10 +14,19 @@ export class TelegramAdapter implements ChannelAdapter {
   outputFormat = 'telegram' as const;
   private bot: Bot;
   private handlers: MessageHandler[] = [];
+  private stopped = false;
 
   constructor(private config: TelegramAdapterConfig) {
     this.bot = new Bot(config.botToken);
+    this.setupErrorHandler();
     this.setupHandlers();
+  }
+
+  /** Global error handler — prevents Grammy from crashing the polling loop on handler errors. */
+  private setupErrorHandler(): void {
+    this.bot.catch((err) => {
+      console.error('[Telegram] Bot error:', err.message ?? err);
+    });
   }
 
   private setupHandlers(): void {
@@ -221,15 +230,57 @@ export class TelegramAdapter implements ChannelAdapter {
   }
 
   async start(): Promise<void> {
-    console.log('[Telegram] Starting bot...');
-    // Start polling (non-blocking)
+    this.stopped = false;
+    this.startPollingLoop();
+  }
+
+  /**
+   * Starts Grammy polling and automatically restarts it if the loop dies.
+   *
+   * Grammy's internal `withRetries` uses exponential back-off up to 20 minutes
+   * for transient API errors — which explains the observed ~15 min delay.
+   * By catching the loop exit and restarting with a short fixed delay we
+   * prevent that snowball effect.
+   */
+  private startPollingLoop(): void {
+    console.log('[Telegram] Starting polling...');
+
     this.bot.start({
       onStart: () => console.log('[Telegram] Bot is running'),
+      // Limit long-poll timeout so we detect issues faster
+      timeout: 30,
+      // Only receive update types we actually handle
+      allowed_updates: ['message'],
+    })
+    .catch((err: unknown) => {
+      // bot.start() resolves when bot.stop() is called, and rejects on
+      // unrecoverable errors (e.g. 401 invalid token, 409 conflict).
+      if (this.stopped) return; // graceful shutdown — nothing to do
+
+      console.error('[Telegram] Polling loop crashed:', err instanceof Error ? err.message : err);
+    })
+    .finally(() => {
+      if (this.stopped) return;
+
+      // The polling loop exited unexpectedly — restart after a short delay.
+      // This avoids Grammy's exponential back-off (which can grow to 20 min).
+      const RESTART_DELAY_MS = 5_000;
+      console.warn(`[Telegram] Polling ended unexpectedly. Restarting in ${RESTART_DELAY_MS / 1000}s...`);
+
+      // Create a fresh Bot instance so Grammy's internal state is clean
+      this.bot = new Bot(this.config.botToken);
+      this.setupErrorHandler();
+      this.setupHandlers();
+
+      setTimeout(() => {
+        if (!this.stopped) this.startPollingLoop();
+      }, RESTART_DELAY_MS);
     });
   }
 
   async stop(): Promise<void> {
     console.log('[Telegram] Stopping bot...');
+    this.stopped = true;
     await this.bot.stop();
   }
 

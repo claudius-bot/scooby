@@ -1840,8 +1840,10 @@ async function main() {
       const sessionMgr = sessionManagers.get(workspaceId)!;
       const session = await sessionMgr.getOrCreate('cron', `cron:${job.id}`);
 
-      // Use workspace default agent for cron jobs
-      const cronAgent = wsForJob.agent;
+      // Use job-specific agent if set, otherwise workspace default
+      const cronAgent = (job.agentId && agentRegistry.has(job.agentId))
+        ? agentRegistry.get(job.agentId)!
+        : wsForJob.agent;
 
       const toolCtx = buildToolContext(wsForJob, session.id, workspaceId);
 
