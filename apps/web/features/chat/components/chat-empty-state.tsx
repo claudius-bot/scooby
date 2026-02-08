@@ -1,6 +1,8 @@
 'use client';
 
 import type { AgentDetail } from '@scooby/schemas';
+import { Avatar } from '@/components/avatar';
+import { getGatewayUrl } from '@/lib/gateway-config';
 
 interface ChatEmptyStateProps {
   agent?: AgentDetail | null;
@@ -13,16 +15,24 @@ const DEFAULT_SUGGESTIONS = [
   'What tools do you have access to?',
 ];
 
+function resolveAvatarUrl(path: string | undefined | null): string | undefined {
+  if (!path) return undefined;
+  if (path.startsWith('http')) return path;
+  const base = getGatewayUrl();
+  return base ? `${base}${path}` : undefined;
+}
+
 export function ChatEmptyState({ agent, onSuggestionClick }: ChatEmptyStateProps) {
-  const emoji = agent?.emoji ?? '🤖';
   const name = agent?.name ?? 'Assistant';
   const about = agent?.about;
 
   return (
     <div className="flex h-full flex-col items-center justify-center px-4">
-      <div className="flex size-16 items-center justify-center rounded-2xl bg-neutral-100 text-3xl">
-        {emoji}
-      </div>
+      <Avatar
+        src={resolveAvatarUrl(agent?.avatar)}
+        name={name}
+        className="size-16 rounded-2xl"
+      />
       <h2 className="mt-4 text-2xl font-semibold text-neutral-900" style={{ fontFamily: 'var(--font-outfit, sans-serif)' }}>
         How can I help you today?
       </h2>

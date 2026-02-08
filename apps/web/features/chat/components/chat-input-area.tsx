@@ -44,11 +44,7 @@ function AgentSelector({ agents, selectedId, onSelect }: AgentSelectorProps) {
         className="inline-flex items-center gap-1.5 rounded-full border border-neutral-200 bg-neutral-50 px-2.5 py-1 text-xs font-medium text-neutral-600 transition-colors hover:bg-neutral-100"
       >
         {selected ? (
-          <Avatar
-            src={resolveAvatarUrl(selected.avatar)}
-            name={selected.name}
-            className="size-4 rounded-full"
-          />
+          <Avatar src={resolveAvatarUrl(selected.avatar)} name={selected.name} className="size-4" />
         ) : (
           <Sparkles className="size-3.5 text-neutral-400" />
         )}
@@ -84,7 +80,7 @@ function AgentSelector({ agents, selectedId, onSelect }: AgentSelectorProps) {
                       <Avatar
                         src={resolveAvatarUrl(agent.avatar)}
                         name={agent.name}
-                        className="size-5 rounded-full"
+                        className="size-5"
                       />
                       <span>{agent.name}</span>
                     </CommandItem>
