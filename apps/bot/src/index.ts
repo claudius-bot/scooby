@@ -72,7 +72,13 @@ import {
   type InboundMessage,
   type ChannelAdapter,
 } from '@scooby/channels';
-import { GatewayServer, createChatCompletionsApi } from '@scooby/gateway';
+import {
+  GatewayServer,
+  createChatCompletionsApi,
+  ChatSendParamsSchema,
+  ChatHistoryParamsSchema,
+  SessionListParamsSchema,
+} from '@scooby/gateway';
 import {
   CommandProcessor,
   createDefaultRegistry,
@@ -1143,7 +1149,7 @@ async function main() {
 
   // Register WebSocket method handlers
   gateway.registerMethod('chat.send', async (connectionId, params) => {
-    const { workspaceId, text } = params as { workspaceId: string; text: string };
+    const { workspaceId, text, attachments } = ChatSendParamsSchema.parse(params);
     const ws = workspaces.get(workspaceId);
     if (!ws) throw new Error(`Workspace not found: ${workspaceId}`);
 
@@ -1252,11 +1258,71 @@ async function main() {
       await performMemoryFlush(workspaceId, session.id, sessionMgr, resolvedAgent);
     }
 
+    // Process web chat attachments (same flow as Telegram)
+    let messageContent = text;
+    let transcriptContent: string | TranscriptContentPart[] = text;
+
+    if (attachments && attachments.length > 0) {
+      const imageParts: TranscriptContentPart[] = [];
+
+      for (const att of attachments) {
+        // Extract base64 data from data URL (strip "data:image/jpeg;base64," prefix)
+        const base64Match = att.dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+        if (!base64Match) continue;
+
+        const mimeType = base64Match[1];
+        const base64Data = base64Match[2];
+        const buffer = Buffer.from(base64Data, 'base64');
+
+        // Determine file type and destination
+        const isImage = mimeType.startsWith('image/');
+        const isAudio = mimeType.startsWith('audio/');
+        const ext = att.name.includes('.') ? att.name.split('.').pop() : (isImage ? 'jpg' : isAudio ? 'ogg' : 'bin');
+        const fileName = `${crypto.randomUUID()}.${ext}`;
+
+        if (isAudio) {
+          const audioDir = resolve(ws.path, 'data', 'audio');
+          await mkdir(audioDir, { recursive: true });
+          const destPath = resolve(audioDir, fileName);
+          await writeFile(destPath, buffer);
+          messageContent += `\n[The user sent a voice message saved to data/audio/${fileName}. Use audio_transcribe tool with filePath "data/audio/${fileName}" to transcribe it, then respond to the transcribed text as if the user had typed it directly. Do not send back a transcribed version of the user's message, just respond like any other message.]`;
+        } else if (isImage) {
+          const imagesDir = resolve(ws.path, 'data', 'images');
+          await mkdir(imagesDir, { recursive: true });
+          const destPath = resolve(imagesDir, fileName);
+          await writeFile(destPath, buffer);
+          imageParts.push({
+            type: 'image',
+            path: destPath,
+            mediaType: mimeType,
+          });
+          messageContent += `\n[Image saved to data/images/${fileName}. For image_gen tool use localPath "data/images/${fileName}".]`;
+        } else {
+          // Generic document — save to data/files and note in message
+          const filesDir = resolve(ws.path, 'data', 'files');
+          await mkdir(filesDir, { recursive: true });
+          const destPath = resolve(filesDir, att.name);
+          await writeFile(destPath, buffer);
+          messageContent += `\n[File "${att.name}" saved to data/files/${att.name}.]`;
+        }
+      }
+
+      if (imageParts.length > 0) {
+        const caption = messageContent.trim() || 'The user sent an image.';
+        transcriptContent = [
+          { type: 'text', text: caption },
+          ...imageParts,
+        ];
+      } else {
+        transcriptContent = messageContent;
+      }
+    }
+
     // Record user message
     await sessionMgr.appendTranscript(session.id, {
       timestamp: new Date().toISOString(),
       role: 'user',
-      content: text,
+      content: transcriptContent,
     });
 
     // Run agent
@@ -1341,11 +1407,7 @@ async function main() {
   });
 
   gateway.registerMethod('chat.history', async (_connectionId, params) => {
-    const { workspaceId, sessionId, limit } = params as {
-      workspaceId: string;
-      sessionId: string;
-      limit?: number;
-    };
+    const { workspaceId, sessionId, limit } = ChatHistoryParamsSchema.parse(params);
     const mgr = sessionManagers.get(workspaceId);
     if (!mgr) return { transcript: [] };
     const transcript = await mgr.getTranscript(sessionId, limit);
@@ -1353,7 +1415,7 @@ async function main() {
   });
 
   gateway.registerMethod('session.list', async (_connectionId, params) => {
-    const { workspaceId } = params as { workspaceId: string };
+    const { workspaceId } = SessionListParamsSchema.parse(params);
     const mgr = sessionManagers.get(workspaceId);
     if (!mgr) return { sessions: [] };
     return { sessions: await mgr.listSessions() };
@@ -1374,7 +1436,7 @@ async function main() {
   });
 
   gateway.registerMethod('workspace.get', async (_connectionId, params) => {
-    const { workspaceId } = params as { workspaceId: string };
+    const { workspaceId } = SessionListParamsSchema.parse(params);
     const ws = workspaces.get(workspaceId);
     if (!ws) throw new Error(`Workspace not found: ${workspaceId}`);
     return { id: ws.id, path: ws.path, agent: ws.agent };
