@@ -9,3 +9,5 @@ export * from "./protocol.js";
 export * from "./chat.js";
 export * from "./usage.js";
 export * from "./system.js";
+export * from "./model.js";
+export { MODELS, getModel, MODEL_PROVIDER_SLUGS } from "./models-data.js";

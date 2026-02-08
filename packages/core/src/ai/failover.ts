@@ -73,7 +73,7 @@ export interface FailoverOptions {
 // ── Helpers ─────────────────────────────────────────────────────────────
 
 function candidateLabel(c: FailoverCandidate): string {
-  return `${c.candidate.provider}:${c.candidate.model}`;
+  return `${c.candidate.provider}/${c.candidate.model}`;
 }
 
 // ── generateWithFailover ────────────────────────────────────────────────

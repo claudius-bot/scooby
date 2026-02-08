@@ -14,6 +14,7 @@ export interface ApiContext {
   // Read callbacks
   listAgents?: () => Promise<any[]>;
   getAgent?: (id: string) => Promise<any | null>;
+  getAgentAvatar?: (id: string) => Promise<{ data: ArrayBuffer; contentType: string } | null>;
   getWorkspaceDetail?: (id: string) => Promise<any | null>;
   listWorkspaceFiles?: (workspaceId: string, subpath?: string) => Promise<any[]>;
   readWorkspaceFile?: (workspaceId: string, filePath: string) => Promise<{ content: string; path: string } | null>;
@@ -114,6 +115,16 @@ export function createApi(ctx: ApiContext) {
     const agent = await ctx.getAgent(c.req.param('id'));
     if (!agent) throw new HTTPException(404, { message: 'Agent not found' });
     return c.json(agent);
+  });
+
+  // GET /api/agents/:id/avatar — serve agent avatar image
+  app.get('/agents/:id/avatar', async (c) => {
+    if (!ctx.getAgentAvatar) return c.json({ error: 'Not implemented' }, 404);
+    const result = await ctx.getAgentAvatar(c.req.param('id'));
+    if (!result) throw new HTTPException(404, { message: 'Avatar not found' });
+    c.header('Content-Type', result.contentType);
+    c.header('Cache-Control', 'public, max-age=3600');
+    return c.body(result.data);
   });
 
   // GET /api/tools

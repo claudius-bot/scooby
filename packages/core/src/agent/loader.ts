@@ -1,7 +1,9 @@
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readFile, readdir, stat, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { AgentDefinitionSchema } from '@scooby/schemas';
 import type { AgentProfile } from '../workspace/types.js';
+
+const AVATAR_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'svg'] as const;
 
 async function safeRead(filePath: string, fallback = ''): Promise<string> {
   try {
@@ -12,6 +14,23 @@ async function safeRead(filePath: string, fallback = ''): Promise<string> {
     }
     throw err;
   }
+}
+
+/**
+ * Detect an avatar file in the agent directory.
+ * Returns the filename (e.g. "avatar.jpg") if found, or empty string.
+ */
+async function detectAvatar(agentDir: string): Promise<string> {
+  for (const ext of AVATAR_EXTENSIONS) {
+    const filePath = join(agentDir, `avatar.${ext}`);
+    try {
+      await access(filePath);
+      return `avatar.${ext}`;
+    } catch {
+      // not found, try next
+    }
+  }
+  return '';
 }
 
 /**
@@ -57,19 +76,20 @@ export async function loadAgentDefinitions(agentsDir: string): Promise<Map<strin
 
     const def = result.data;
 
-    // Load markdown files in parallel
-    const [identity, soul, tools, scratchpad] = await Promise.all([
+    // Load markdown files in parallel; detect avatar file
+    const [identity, soul, tools, scratchpad, avatarFile] = await Promise.all([
       safeRead(join(agentDir, 'IDENTITY.md')),
       safeRead(join(agentDir, 'SOUL.md')),
       safeRead(join(agentDir, 'TOOLS.md')),
       safeRead(join(agentDir, 'SCRATCHPAD.md')),
+      detectAvatar(agentDir),
     ]);
 
     const profile: AgentProfile = {
       name: def.name,
       vibe: '',
       emoji: def.emoji,
-      avatar: def.avatar,
+      avatar: avatarFile || def.avatar,
       soul,
       identity,
       tools,

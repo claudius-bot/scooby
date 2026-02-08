@@ -661,7 +661,7 @@ async function main() {
             name: ws.agent.name,
             vibe: ws.agent.vibe,
             emoji: ws.agent.emoji,
-            avatar: ws.agent.avatar,
+            avatar: ws.agent.avatar && ws.agent.id ? `/api/agents/${ws.agent.id}/avatar` : '',
           },
         }));
       },
@@ -759,7 +759,7 @@ async function main() {
           id,
           name: a.name,
           emoji: a.emoji,
-          avatar: a.avatar,
+          avatar: a.avatar ? `/api/agents/${id}/avatar` : '',
           about: a.about ?? '',
           model: a.modelRef ?? 'fast',
           fallbackModel: a.fallbackModelRef,
@@ -776,7 +776,7 @@ async function main() {
           id: a.id ?? id,
           name: a.name,
           emoji: a.emoji,
-          avatar: a.avatar,
+          avatar: a.avatar ? `/api/agents/${id}/avatar` : '',
           about: a.about ?? '',
           model: a.modelRef ?? 'fast',
           fallbackModel: a.fallbackModelRef,
@@ -784,6 +784,27 @@ async function main() {
           skills: a.skillNames ?? [],
           universal: a.universalTools !== false,
         };
+      },
+
+      getAgentAvatar: async (id: string) => {
+        const a = agentRegistry.get(id);
+        if (!a?.avatar) return null;
+        const avatarPath = join(agentsDir, id, a.avatar);
+        try {
+          const buf = await readFile(avatarPath);
+          const ext = a.avatar.split('.').pop()?.toLowerCase() ?? '';
+          const contentTypes: Record<string, string> = {
+            jpg: 'image/jpeg',
+            jpeg: 'image/jpeg',
+            png: 'image/png',
+            webp: 'image/webp',
+            gif: 'image/gif',
+            svg: 'image/svg+xml',
+          };
+          return { data: buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer, contentType: contentTypes[ext] ?? 'application/octet-stream' };
+        } catch {
+          return null;
+        }
       },
 
       getWorkspaceDetail: async (id: string) => {
@@ -798,7 +819,7 @@ async function main() {
             name: ws.agent.name,
             vibe: ws.agent.vibe,
             emoji: ws.agent.emoji,
-            avatar: ws.agent.avatar,
+            avatar: ws.agent.avatar && ws.agent.id ? `/api/agents/${ws.agent.id}/avatar` : '',
           },
           defaultAgent: wsConfig?.defaultAgent ?? agentRegistry.getDefaultId(),
           permissions: {

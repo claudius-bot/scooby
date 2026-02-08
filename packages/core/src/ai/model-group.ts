@@ -12,14 +12,14 @@ export interface ModelSelection {
 
 /**
  * Tracks which model candidates are in a cooldown period (e.g. after a
- * rate-limit or transient failure).  Keys are `provider:model` strings
+ * rate-limit or transient failure).  Keys are `provider/model` strings
  * mapped to an expiry timestamp in milliseconds.
  */
 export class CooldownTracker {
   private cooldowns = new Map<string, number>();
 
   private key(provider: string, model: string): string {
-    return `${provider}:${model}`;
+    return `${provider}/${model}`;
   }
 
   markCooldown(provider: string, model: string, durationMs: number): void {

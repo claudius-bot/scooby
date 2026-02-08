@@ -152,7 +152,7 @@ flowchart TD
 ```mermaid
 flowchart TD
     START[Check if model available]
-    START --> KEY[Build key: 'provider:model']
+    START --> KEY[Build key: 'provider/model']
     KEY --> LOOKUP{Key in<br/>cooldowns map?}
 
     LOOKUP --> |No| AVAILABLE[Return: AVAILABLE]

@@ -257,12 +257,12 @@ export class AgentRunner {
 
         // Check if we need to escalate and re-run with a stronger model
         if (escState.escalated && currentGroup === 'fast' && stepHadToolCalls) {
-          const previousModel = `${selection.candidate.provider}:${selection.candidate.model}`;
+          const previousModel = `${selection.candidate.provider}/${selection.candidate.model}`;
           currentGroup = 'slow';
           const newSelection = selectModel(currentGroup);
 
           if (newSelection) {
-            const newModel = `${newSelection.candidate.provider}:${newSelection.candidate.model}`;
+            const newModel = `${newSelection.candidate.provider}/${newSelection.candidate.model}`;
             yield {
               type: 'model-switch',
               from: previousModel,
@@ -306,7 +306,7 @@ export class AgentRunner {
           role: 'assistant',
           content: fullResponse,
           metadata: {
-            modelUsed: `${selection.candidate.provider}:${selection.candidate.model}`,
+            modelUsed: `${selection.candidate.provider}/${selection.candidate.model}`,
             modelGroup: currentGroup,
             escalated: escState.escalated,
             escalationReason: escState.reason,
