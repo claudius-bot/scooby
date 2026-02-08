@@ -983,6 +983,10 @@ async function main() {
         }
       },
 
+      listChannelBindings: async (workspaceId: string) => {
+        return router.getBindingsForWorkspace(workspaceId);
+      },
+
       listCronJobs: async (workspaceId: string) => {
         const scheduler = cronSchedulers.get(workspaceId);
         if (!scheduler) return [];
@@ -1844,7 +1848,7 @@ async function main() {
       const agentRunner = new AgentRunner(toolRegistry, cooldowns, sessionMgr);
       let response = '';
       for await (const event of agentRunner.run({
-        messages: [{ role: 'user', content: job.prompt }],
+        messages: [{ role: 'user', content: `[Scheduled Task] Your response will be delivered directly to the user. Do not use the send_message tool — just produce the requested content as your response.\n\nTask: ${job.prompt}` }],
         workspaceId,
         workspacePath: wsForJob.path,
         agent: cronAgent,
@@ -1873,6 +1877,8 @@ async function main() {
           text: response,
           format: 'markdown',
         });
+      } else if (response && !job.delivery) {
+        console.warn(`[Cron] Job "${job.id}" produced a response but has no delivery target — message discarded`);
       }
 
       console.log(`[Cron] Job "${job.id}" completed for workspace ${workspaceId}`);

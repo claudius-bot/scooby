@@ -241,6 +241,14 @@ export const useGateway = {
     ),
   },
 
+  // ── Channels ──────────────────────────────────────────────────────
+  channels: {
+    bindings: qParam<{ workspaceId: string }, ClientReturn<'channels', 'bindings'>>(
+      (p) => ['workspaces', p.workspaceId, 'channel-bindings'],
+      (c, p) => c.channels.bindings(p.workspaceId),
+    ),
+  },
+
   // ── Cron ─────────────────────────────────────────────────────────
   cron: {
     list: qParam<{ workspaceId: string }, ClientReturn<'cron', 'list'>>(

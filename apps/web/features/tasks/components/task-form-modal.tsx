@@ -16,6 +16,7 @@ import {
   Repeat,
   Sparkles,
   Pencil,
+  Send,
 } from 'lucide-react';
 import type { CronJob, CronSchedule } from './types';
 
@@ -38,11 +39,25 @@ interface TaskFormData {
   expression: string;
   // "at" fields
   at: string;
+  // delivery fields
+  deliveryEnabled: boolean;
+  /** Either a binding key like "telegram:12345" or "__custom__" */
+  deliverySelection: string;
+  /** Only used when deliverySelection === '__custom__' */
+  customDeliveryChannel: string;
+  customDeliveryConversationId: string;
+}
+
+export interface ChannelBindingOption {
+  channelType: string;
+  conversationId: string;
 }
 
 interface TaskFormModalProps {
   /** Pre-fill for editing */
   job?: CronJob;
+  /** Known channel bindings for this workspace */
+  bindings?: ChannelBindingOption[];
   onSubmit: (job: Omit<CronJob, 'state'>) => void | Promise<void>;
 }
 
@@ -104,6 +119,7 @@ function buildSchedule(form: TaskFormData): CronSchedule {
 }
 
 function formFromJob(job: CronJob): TaskFormData {
+  const hasDelivery = !!job.delivery;
   return {
     name: job.name ?? '',
     prompt: job.prompt,
@@ -113,6 +129,12 @@ function formFromJob(job: CronJob): TaskFormData {
     time: job.schedule.time ?? '09:00',
     expression: job.schedule.expression ?? '0 * * * *',
     at: job.schedule.at ?? '',
+    deliveryEnabled: hasDelivery,
+    deliverySelection: hasDelivery
+      ? `${job.delivery!.channel}:${job.delivery!.conversationId}`
+      : '__custom__',
+    customDeliveryChannel: 'telegram',
+    customDeliveryConversationId: '',
   };
 }
 
@@ -125,20 +147,31 @@ const DEFAULT_FORM: TaskFormData = {
   time: '09:00',
   expression: '0 * * * *',
   at: '',
+  deliveryEnabled: true,
+  deliverySelection: '',
+  customDeliveryChannel: 'telegram',
+  customDeliveryConversationId: '',
 };
 
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
-export function TaskFormModal({ job, onSubmit }: TaskFormModalProps) {
+export function TaskFormModal({ job, bindings = [], onSubmit }: TaskFormModalProps) {
   const modal = useModal();
   const isEditing = !!job;
   const formId = useId();
 
-  const [form, setForm] = useState<TaskFormData>(
-    job ? formFromJob(job) : DEFAULT_FORM
-  );
+  const [form, setForm] = useState<TaskFormData>(() => {
+    const initial = job ? formFromJob(job) : { ...DEFAULT_FORM };
+    // Auto-select the first binding if available and no selection set
+    if (!initial.deliverySelection && bindings.length > 0) {
+      initial.deliverySelection = `${bindings[0].channelType}:${bindings[0].conversationId}`;
+    } else if (!initial.deliverySelection) {
+      initial.deliverySelection = '__custom__';
+    }
+    return initial;
+  });
   const [submitting, setSubmitting] = useState(false);
 
   const update = useCallback(
@@ -148,16 +181,36 @@ export function TaskFormModal({ job, onSubmit }: TaskFormModalProps) {
     []
   );
 
+  const isCustomDelivery = form.deliverySelection === '__custom__';
+
   const canSubmit =
     form.prompt.trim().length > 0 &&
     ((form.scheduleKind === 'every' && form.interval.trim().length > 0) ||
       (form.scheduleKind === 'daily' && form.time.trim().length > 0) ||
       (form.scheduleKind === 'cron' && form.expression.trim().length > 0) ||
-      (form.scheduleKind === 'at' && form.at.trim().length > 0));
+      (form.scheduleKind === 'at' && form.at.trim().length > 0)) &&
+    (!form.deliveryEnabled || (
+      isCustomDelivery
+        ? form.customDeliveryChannel.trim().length > 0 && form.customDeliveryConversationId.trim().length > 0
+        : form.deliverySelection.length > 0
+    ));
 
   const handleSubmit = async () => {
     if (!canSubmit || submitting) return;
     setSubmitting(true);
+
+    let delivery: { channel: string; conversationId: string } | undefined;
+    if (form.deliveryEnabled) {
+      if (isCustomDelivery) {
+        delivery = {
+          channel: form.customDeliveryChannel.trim(),
+          conversationId: form.customDeliveryConversationId.trim(),
+        };
+      } else {
+        const [ch, ...rest] = form.deliverySelection.split(':');
+        delivery = { channel: ch, conversationId: rest.join(':') };
+      }
+    }
 
     const result: Omit<CronJob, 'state'> = {
       id: job?.id ?? generateId(),
@@ -165,6 +218,7 @@ export function TaskFormModal({ job, onSubmit }: TaskFormModalProps) {
       prompt: form.prompt.trim(),
       enabled: form.enabled,
       schedule: buildSchedule(form),
+      delivery,
       source: job?.source ?? 'config',
       createdAt: job?.createdAt ?? new Date().toISOString(),
     };
@@ -317,6 +371,75 @@ export function TaskFormModal({ job, onSubmit }: TaskFormModalProps) {
                 }
               />
             </FieldGroup>
+          )}
+        </div>
+
+        {/* ── Delivery ─────────────────────────────── */}
+        <div className="rounded-lg border border-neutral-200 bg-neutral-50/50 p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-neutral-500">
+              <Send className="h-3.5 w-3.5" />
+              <span className="text-[11px] font-semibold uppercase tracking-wider">
+                Delivery
+              </span>
+            </div>
+            <Switch
+              checked={form.deliveryEnabled}
+              onCheckedChange={(checked) => update('deliveryEnabled', checked)}
+            />
+          </div>
+
+          {form.deliveryEnabled && (
+            <div className="space-y-3">
+              {bindings.length > 0 && (
+                <FieldGroup label="Deliver to" hint="Select a connected channel">
+                  <select
+                    value={form.deliverySelection}
+                    onChange={(e) => update('deliverySelection', e.target.value)}
+                    className={cn(
+                      'flex h-9 w-full rounded-md border border-neutral-200 bg-white px-3 py-1',
+                      'text-sm text-neutral-900',
+                      'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-neutral-400',
+                    )}
+                  >
+                    {bindings.map((b) => (
+                      <option key={`${b.channelType}:${b.conversationId}`} value={`${b.channelType}:${b.conversationId}`}>
+                        {b.channelType} — {b.conversationId}
+                      </option>
+                    ))}
+                    <option value="__custom__">Custom...</option>
+                  </select>
+                </FieldGroup>
+              )}
+
+              {(bindings.length === 0 || isCustomDelivery) && (
+                <>
+                  <FieldGroup label="Channel" hint="Where to deliver results">
+                    <select
+                      value={form.customDeliveryChannel}
+                      onChange={(e) => update('customDeliveryChannel', e.target.value)}
+                      className={cn(
+                        'flex h-9 w-full rounded-md border border-neutral-200 bg-white px-3 py-1',
+                        'text-sm text-neutral-900',
+                        'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-neutral-400',
+                      )}
+                    >
+                      <option value="telegram">Telegram</option>
+                      <option value="webchat">Web Chat</option>
+                    </select>
+                  </FieldGroup>
+
+                  <FieldGroup label="Conversation ID" hint="Chat or channel ID to deliver to">
+                    <Input
+                      placeholder={form.customDeliveryChannel === 'telegram' ? 'e.g. 6039959147' : 'e.g. connection-id'}
+                      value={form.customDeliveryConversationId}
+                      onChange={(e) => update('customDeliveryConversationId', e.target.value)}
+                      className="font-mono"
+                    />
+                  </FieldGroup>
+                </>
+              )}
+            </div>
           )}
         </div>
 

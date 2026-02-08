@@ -34,6 +34,10 @@ export const cronAddTool: ScoobyToolDefinition = {
       ? { channel: ctx.conversation.channelType, conversationId: ctx.conversation.conversationId }
       : undefined);
 
+    if (!delivery) {
+      return 'Error: No delivery target could be determined. Provide a delivery target explicitly (channel and conversationId) or create this job from within a conversation.';
+    }
+
     // Set anchorMs for interval-based schedules
     if (schedule.kind === 'every') {
       schedule.anchorMs = Date.now();
@@ -54,7 +58,7 @@ export const cronAddTool: ScoobyToolDefinition = {
     await ctx.cronScheduler.addJob(entry);
 
     const scheduleDesc = describeSchedule(schedule);
-    return `Job scheduled successfully.\nID: ${entry.id}\nSchedule: ${scheduleDesc}\nPrompt: ${input.prompt}${entry.name ? `\nName: ${entry.name}` : ''}`;
+    return `Job scheduled successfully.\nID: ${entry.id}\nSchedule: ${scheduleDesc}\nPrompt: ${input.prompt}\nDelivery: ${delivery.channel}:${delivery.conversationId}${entry.name ? `\nName: ${entry.name}` : ''}`;
   },
 };
 

@@ -127,6 +127,32 @@ export class MessageRouter {
     return false;
   }
 
+  /**
+   * Return all known channel bindings (config + dynamic) for a given workspace.
+   */
+  getBindingsForWorkspace(workspaceId: string): ChannelBinding[] {
+    const results: ChannelBinding[] = [];
+
+    // Config-based Telegram bindings
+    for (const [chatId, wsId] of this.telegramRoutes) {
+      if (wsId === workspaceId) {
+        results.push({ channelType: 'telegram', conversationId: chatId, workspaceId: wsId, boundAt: '' });
+      }
+    }
+
+    // Dynamic bindings
+    for (const [key, wsId] of this.dynamicBindings) {
+      if (wsId !== workspaceId) continue;
+      const [channelType, ...rest] = key.split(':');
+      const conversationId = rest.join(':');
+      // Skip if already covered by config
+      if (results.some(b => b.channelType === channelType && b.conversationId === conversationId)) continue;
+      results.push({ channelType, conversationId, workspaceId: wsId, boundAt: '' });
+    }
+
+    return results;
+  }
+
   route(msg: InboundMessage): RouteResult | null {
     // Check dynamic bindings first
     const key = `${msg.channelType}:${msg.conversationId}`;

@@ -23,6 +23,7 @@ export interface ApiContext {
   readMemoryFile?: (workspaceId: string, fileName: string) => Promise<string | null>;
   listCronJobs?: (workspaceId: string) => Promise<any[]>;
   getCronHistory?: (workspaceId: string, limit?: number) => Promise<any[]>;
+  listChannelBindings?: (workspaceId: string) => Promise<any[]>;
   listTools?: () => Promise<any[]>;
   getSession?: (workspaceId: string, sessionId: string) => Promise<any | null>;
   getSystemStatus?: () => Promise<any>;
@@ -200,6 +201,13 @@ export function createApi(ctx: ApiContext) {
     const content = await ctx.readMemoryFile(c.req.param('id'), c.req.param('name'));
     if (content === null) throw new HTTPException(404, { message: 'Memory file not found' });
     return c.json({ content });
+  });
+
+  // GET /api/workspaces/:id/channel-bindings
+  app.get('/workspaces/:id/channel-bindings', async (c) => {
+    if (!ctx.listChannelBindings) return c.json({ error: 'Not implemented' }, 404);
+    const bindings = await ctx.listChannelBindings(c.req.param('id'));
+    return c.json({ bindings });
   });
 
   // GET /api/workspaces/:id/cron

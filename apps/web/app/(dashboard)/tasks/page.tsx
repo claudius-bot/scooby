@@ -180,6 +180,12 @@ export default function TasksPage() {
   const histQ3 = useGateway.cron.history({ workspaceId: ws3, limit: 20 }, { enabled: !!ws3 });
   const histQ4 = useGateway.cron.history({ workspaceId: ws4, limit: 20 }, { enabled: !!ws4 });
 
+  const bindQ0 = useGateway.channels.bindings({ workspaceId: ws0 }, { enabled: !!ws0 });
+  const bindQ1 = useGateway.channels.bindings({ workspaceId: ws1 }, { enabled: !!ws1 });
+  const bindQ2 = useGateway.channels.bindings({ workspaceId: ws2 }, { enabled: !!ws2 });
+  const bindQ3 = useGateway.channels.bindings({ workspaceId: ws3 }, { enabled: !!ws3 });
+  const bindQ4 = useGateway.channels.bindings({ workspaceId: ws4 }, { enabled: !!ws4 });
+
   const isLoading =
     wsLoading ||
     cronQ0.isLoading ||
@@ -188,11 +194,12 @@ export default function TasksPage() {
     cronQ3.isLoading ||
     cronQ4.isLoading;
 
-  // Build workspace → jobs & history maps
+  // Build workspace → jobs, history & bindings maps
   const workspaceCronMap = useMemo(() => {
-    const map = new Map<string, { jobs: CronJob[]; history: CronRun[] }>();
+    const map = new Map<string, { jobs: CronJob[]; history: CronRun[]; bindings: Array<{ channelType: string; conversationId: string }> }>();
     const cronQueries = [cronQ0, cronQ1, cronQ2, cronQ3, cronQ4];
     const histQueries = [histQ0, histQ1, histQ2, histQ3, histQ4];
+    const bindQueries = [bindQ0, bindQ1, bindQ2, bindQ3, bindQ4];
     const wsIds = [ws0, ws1, ws2, ws3, ws4];
 
     wsIds.forEach((wsId, i) => {
@@ -200,6 +207,7 @@ export default function TasksPage() {
         map.set(wsId, {
           jobs: cronQueries[i].data ?? [],
           history: histQueries[i].data ?? [],
+          bindings: bindQueries[i].data ?? [],
         });
       }
     });
@@ -220,6 +228,11 @@ export default function TasksPage() {
     histQ2.data,
     histQ3.data,
     histQ4.data,
+    bindQ0.data,
+    bindQ1.data,
+    bindQ2.data,
+    bindQ3.data,
+    bindQ4.data,
   ]);
 
   // Aggregate stats
@@ -313,8 +326,10 @@ export default function TasksPage() {
       const targetWsId = workspaceId ?? workspaces[0]?.id;
       if (!targetWsId) return;
 
+      const wsBindings = workspaceCronMap.get(targetWsId)?.bindings ?? [];
       modal.show(
         <TaskFormModal
+          bindings={wsBindings}
           onSubmit={async (job) => {
             const payload = { ...job, source: job.source ?? 'config', enabled: job.enabled ?? true };
             await addCron.mutateAsync({
@@ -326,14 +341,16 @@ export default function TasksPage() {
         />
       );
     },
-    [workspaces, modal, addCron, invalidate]
+    [workspaces, workspaceCronMap, modal, addCron, invalidate]
   );
 
   const openEditModal = useCallback(
     (workspaceId: string, job: CronJob) => {
+      const wsBindings = workspaceCronMap.get(workspaceId)?.bindings ?? [];
       modal.show(
         <TaskFormModal
           job={job}
+          bindings={wsBindings}
           onSubmit={async (updated) => {
             const payload = { ...updated, source: updated.source ?? 'config', enabled: updated.enabled ?? true };
             // Remove old and re-add with updated data
@@ -347,7 +364,7 @@ export default function TasksPage() {
         />
       );
     },
-    [modal, addCron, removeCron, invalidate]
+    [workspaceCronMap, modal, addCron, removeCron, invalidate]
   );
 
   const handleToggleJob = useCallback(

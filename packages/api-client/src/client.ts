@@ -37,6 +37,13 @@ const FilesResponseSchema = z.object({ files: z.array(FileEntrySchema) });
 const MemoryFilesResponseSchema = z.object({ files: z.array(z.object({ name: z.string(), path: z.string(), size: z.number() })) });
 const MemorySearchResponseSchema = z.object({ results: z.array(z.object({ source: z.string(), content: z.string(), score: z.number() })) });
 const MemoryFileContentResponseSchema = z.object({ content: z.string() });
+const ChannelBindingSchema = z.object({
+  channelType: z.string(),
+  conversationId: z.string(),
+  workspaceId: z.string(),
+  boundAt: z.string(),
+});
+const ChannelBindingsResponseSchema = z.object({ bindings: z.array(ChannelBindingSchema) });
 const CronJobsResponseSchema = z.object({ jobs: z.array(WorkspaceCronEntrySchema) });
 const CronHistoryResponseSchema = z.object({ history: z.array(CronRunRecordSchema) });
 const FileContentResponseSchema = z.object({ content: z.string(), path: z.string() });
@@ -48,6 +55,7 @@ const HealthResponseSchema = z.object({ status: z.string(), timestamp: z.string(
 export type MemorySearchResult = { source: string; content: string; score: number };
 export type MemoryFileInfo = { name: string; path: string; size: number };
 export type FileContent = { content: string; path: string };
+export type ChannelBinding = z.infer<typeof ChannelBindingSchema>;
 export type HealthStatus = { status: string; timestamp: string };
 
 // ── Client config ─────────────────────────────────────────────────────
@@ -206,6 +214,12 @@ export function createGatewayClient(config: GatewayClientConfig) {
         post(`/api/workspaces/${encodeURIComponent(workspaceId)}/memory`, WriteMemoryResponseSchema, { source, content }),
       delete: (workspaceId: string, sourcePrefix: string) =>
         del(`/api/workspaces/${encodeURIComponent(workspaceId)}/memory/${encodeURIComponent(sourcePrefix)}`, OkResponseSchema),
+    },
+
+    // ── Channels ────────────────────────────────────────────────────
+    channels: {
+      bindings: (workspaceId: string) =>
+        get(`/api/workspaces/${encodeURIComponent(workspaceId)}/channel-bindings`, ChannelBindingsResponseSchema).then(r => r.bindings),
     },
 
     // ── Cron ───────────────────────────────────────────────────────
