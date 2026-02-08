@@ -16,6 +16,7 @@ interface WorkspaceTaskGroupProps {
   onToggleJob?: (workspaceId: string, jobId: string, enabled: boolean) => void;
   onRemoveJob?: (workspaceId: string, jobId: string) => void;
   onEditJob?: (workspaceId: string, job: CronJob) => void;
+  onTriggerJob?: (workspaceId: string, jobId: string) => void;
 }
 
 export function WorkspaceTaskGroup({
@@ -26,6 +27,7 @@ export function WorkspaceTaskGroup({
   onToggleJob,
   onRemoveJob,
   onEditJob,
+  onTriggerJob,
 }: WorkspaceTaskGroupProps) {
   const [collapsed, setCollapsed] = useState(false);
   const activeCount = jobs.filter((j) => j.enabled !== false).length;
@@ -93,6 +95,7 @@ export function WorkspaceTaskGroup({
                   onToggle={(jobId, enabled) => onToggleJob?.(workspace.id, jobId, enabled)}
                   onRemove={(jobId) => onRemoveJob?.(workspace.id, jobId)}
                   onEdit={(j) => onEditJob?.(workspace.id, j)}
+                  onTrigger={(jobId) => onTriggerJob?.(workspace.id, jobId)}
                 />
               );
             })

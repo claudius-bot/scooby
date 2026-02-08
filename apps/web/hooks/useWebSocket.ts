@@ -9,7 +9,7 @@ export function useWebSocket() {
   const [status, setStatus] = useState<string>('disconnected');
 
   useEffect(() => {
-    const wsUrl = getWsUrl() ?? 'ws://localhost:3000/ws';
+    const wsUrl = getWsUrl() ?? 'ws://localhost:4000/ws';
     const client = new WsClient(wsUrl);
     clientRef.current = client;
 

@@ -14,7 +14,7 @@ import { Button } from './ui/button';
 import { setGatewayUrl } from '../lib/gateway-config';
 
 export function GatewaySetupModal({ onConnected }: { onConnected: (url: string) => void }) {
-  const [url, setUrl] = useState('http://localhost:3000');
+  const [url, setUrl] = useState('http://localhost:4000');
   const [error, setError] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
 
@@ -71,7 +71,7 @@ export function GatewaySetupModal({ onConnected }: { onConnected: (url: string) 
             </label>
             <Input
               id="gateway-url"
-              placeholder="http://localhost:3000"
+              placeholder="http://localhost:4000"
               value={url}
               onChange={(e) => {
                 setUrl(e.target.value);

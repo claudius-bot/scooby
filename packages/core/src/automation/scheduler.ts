@@ -144,6 +144,20 @@ export class WorkspaceCronScheduler {
     return true;
   }
 
+  /** Manually trigger a job by ID. */
+  async triggerJob(jobId: string): Promise<void> {
+    const job = this.jobs.find((j) => j.id === jobId);
+    if (!job) throw new Error(`Job "${jobId}" not found`);
+    if (job.state.runningAtMs) throw new Error(`Job "${jobId}" is already running`);
+
+    await this.executeJob(job);
+    this.recomputeNextRuns();
+    if (this.dirty) {
+      await this.persist();
+    }
+    this.armTimer();
+  }
+
   /** Return in-memory list (no recompute). */
   listJobs(): WorkspaceCronEntry[] {
     return this.jobs;

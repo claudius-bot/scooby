@@ -40,6 +40,7 @@ export interface ApiContext {
   deleteMemory?: (workspaceId: string, sourcePrefix: string) => Promise<{ ok: boolean }>;
   addCronJob?: (workspaceId: string, job: any) => Promise<{ ok: boolean }>;
   removeCronJob?: (workspaceId: string, jobId: string) => Promise<{ ok: boolean }>;
+  triggerCronJob?: (workspaceId: string, jobId: string) => Promise<{ ok: boolean }>;
   archiveSession?: (workspaceId: string, sessionId: string) => Promise<{ ok: boolean }>;
   setSessionAgent?: (workspaceId: string, sessionId: string, agentId: string) => Promise<{ ok: boolean }>;
 }
@@ -287,6 +288,13 @@ export function createApi(ctx: ApiContext) {
   app.delete('/workspaces/:id/cron/:jobId', async (c) => {
     if (!ctx.removeCronJob) return c.json({ error: 'Not implemented' }, 404);
     const result = await ctx.removeCronJob(c.req.param('id'), c.req.param('jobId'));
+    return c.json(result);
+  });
+
+  // POST /api/workspaces/:id/cron/:jobId/trigger
+  app.post('/workspaces/:id/cron/:jobId/trigger', async (c) => {
+    if (!ctx.triggerCronJob) return c.json({ error: 'Not implemented' }, 404);
+    const result = await ctx.triggerCronJob(c.req.param('id'), c.req.param('jobId'));
     return c.json(result);
   });
 

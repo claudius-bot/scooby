@@ -1088,6 +1088,13 @@ async function main() {
         return { ok: true };
       },
 
+      triggerCronJob: async (workspaceId: string, jobId: string) => {
+        const scheduler = cronSchedulers.get(workspaceId);
+        if (!scheduler) throw new Error('Cron not configured for workspace');
+        await scheduler.triggerJob(jobId);
+        return { ok: true };
+      },
+
       archiveSession: async (workspaceId: string, sessionId: string) => {
         const mgr = sessionManagers.get(workspaceId);
         if (!mgr) throw new Error('Session manager not found');
@@ -1845,12 +1852,14 @@ async function main() {
         ? agentRegistry.get(job.agentId)!
         : wsForJob.agent;
 
-      const toolCtx = buildToolContext(wsForJob, session.id, workspaceId);
+      const toolCtx = job.delivery
+        ? buildToolContext(wsForJob, session.id, workspaceId, job.delivery.channel, job.delivery.conversationId)
+        : buildToolContext(wsForJob, session.id, workspaceId);
 
       const agentRunner = new AgentRunner(toolRegistry, cooldowns, sessionMgr);
       let response = '';
       for await (const event of agentRunner.run({
-        messages: [{ role: 'user', content: `[Scheduled Task] Your response will be delivered directly to the user. Do not use the send_message tool — just produce the requested content as your response.\n\nTask: ${job.prompt}` }],
+        messages: [{ role: 'user', content: `[Scheduled Task] Use the send_message tool to deliver your response directly to the user.\n\nTask: ${job.prompt}` }],
         workspaceId,
         workspacePath: wsForJob.path,
         agent: cronAgent,

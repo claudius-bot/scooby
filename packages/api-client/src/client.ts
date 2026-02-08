@@ -234,6 +234,8 @@ export function createGatewayClient(config: GatewayClientConfig) {
         post(`/api/workspaces/${encodeURIComponent(workspaceId)}/cron`, OkResponseSchema, job),
       remove: (workspaceId: string, jobId: string) =>
         del(`/api/workspaces/${encodeURIComponent(workspaceId)}/cron/${encodeURIComponent(jobId)}`, OkResponseSchema),
+      trigger: (workspaceId: string, jobId: string) =>
+        post(`/api/workspaces/${encodeURIComponent(workspaceId)}/cron/${encodeURIComponent(jobId)}/trigger`, OkResponseSchema),
     },
   } as const;
 }

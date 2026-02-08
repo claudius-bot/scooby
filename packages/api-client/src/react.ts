@@ -265,6 +265,9 @@ export const useGateway = {
     remove: m<ClientReturn<'cron', 'remove'>, { workspaceId: string; jobId: string }>(
       (c, input) => c.cron.remove(input.workspaceId, input.jobId),
     ),
+    trigger: m<ClientReturn<'cron', 'trigger'>, { workspaceId: string; jobId: string }>(
+      (c, input) => c.cron.trigger(input.workspaceId, input.jobId),
+    ),
   },
 } as const;
 

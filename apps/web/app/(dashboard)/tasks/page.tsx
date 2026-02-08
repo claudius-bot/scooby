@@ -162,6 +162,7 @@ export default function TasksPage() {
   const modal = useModal();
   const addCron = useGateway.cron.add();
   const removeCron = useGateway.cron.remove();
+  const triggerCron = useGateway.cron.trigger();
 
   // Fetch cron jobs + history for each workspace
   const ws0 = workspaces[0]?.id ?? '';
@@ -419,6 +420,16 @@ export default function TasksPage() {
     [workspaceCronMap, modal, removeCron, invalidate]
   );
 
+  const handleTriggerJob = useCallback(
+    (workspaceId: string, jobId: string) => {
+      triggerCron.mutate(
+        { workspaceId, jobId },
+        { onSuccess: () => invalidate.cron(workspaceId) }
+      );
+    },
+    [triggerCron, invalidate]
+  );
+
   return (
     <div className="max-w-[1400px] mx-auto px-6 py-8 space-y-4">
       {/* Title row */}
@@ -558,6 +569,7 @@ export default function TasksPage() {
                   onToggleJob={handleToggleJob}
                   onRemoveJob={handleRemoveJob}
                   onEditJob={openEditModal}
+                  onTriggerJob={handleTriggerJob}
                 />
               ))
             ) : (
@@ -589,6 +601,7 @@ export default function TasksPage() {
                         }
                         onRemove={(jobId: string) => handleRemoveJob(workspace.id, jobId)}
                         onEdit={(j) => openEditModal(workspace.id, j)}
+                        onTrigger={(jobId: string) => handleTriggerJob(workspace.id, jobId)}
                       />
                     );
                   })

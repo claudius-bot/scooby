@@ -9,6 +9,7 @@ import {
   Pause,
   Trash2,
   Pencil,
+  Zap,
   CalendarClock,
   Timer,
   ChevronDown,
@@ -106,6 +107,7 @@ interface TaskRowProps {
   onToggle?: (id: string, enabled: boolean) => void;
   onRemove?: (id: string) => void;
   onEdit?: (job: CronJob) => void;
+  onTrigger?: (id: string) => void;
 }
 
 export function TaskRow({
@@ -117,6 +119,7 @@ export function TaskRow({
   onToggle,
   onRemove,
   onEdit,
+  onTrigger,
 }: TaskRowProps) {
   const [expanded, setExpanded] = useState(false);
   const statusVariant = getStatusVariant(entry);
@@ -210,6 +213,17 @@ export function TaskRow({
 
         {/* Actions */}
         <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onTrigger?.(entry.id);
+            }}
+            disabled={isRunning}
+            className="p-1.5 rounded text-neutral-400 hover:text-amber-600 hover:bg-amber-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            title="Run now"
+          >
+            <Zap className="h-3.5 w-3.5" />
+          </button>
           <button
             onClick={(e) => {
               e.stopPropagation();
