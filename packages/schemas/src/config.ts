@@ -162,8 +162,8 @@ export type GatewayConfig = z.infer<typeof GatewayConfigSchema>;
 
 // ── Session ──────────────────────────────────────────────────────────
 export const SessionConfigSchema = z.object({
-  idleResetMinutes: z.number().default(30),
-  dailyResetHour: z.number().optional(),
+  idleResetMinutes: z.number().default(720),
+  dailyResetHourUTC: z.number().default(9), // 4 AM EST = 9 UTC
   maxTranscriptLines: z.number().default(500),
 });
 

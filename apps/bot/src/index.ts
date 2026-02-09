@@ -200,13 +200,14 @@ async function main() {
 
   // 5. Create session managers per workspace
   const sessionManagers = new Map<string, SessionManager>();
-  const sessionConfig = config.session ?? { idleResetMinutes: 30, maxTranscriptLines: 500 };
+  const sessionConfig = config.session ?? { idleResetMinutes: 720, maxTranscriptLines: 500, dailyResetHourUTC: 9 };
   for (const [id, ws] of workspaces) {
     const mgr = new SessionManager({
       sessionsDir: resolve(ws.path, 'sessions'),
       workspaceId: id,
-      idleResetMinutes: sessionConfig.idleResetMinutes ?? 30,
+      idleResetMinutes: sessionConfig.idleResetMinutes ?? 720,
       maxTranscriptLines: sessionConfig.maxTranscriptLines ?? 500,
+      dailyResetHourUTC: sessionConfig.dailyResetHourUTC ?? 9,
     });
     sessionManagers.set(id, mgr);
   }
@@ -418,8 +419,9 @@ async function main() {
       const mgr = new SessionManager({
         sessionsDir: resolve(ws.path, 'sessions'),
         workspaceId: ws.id,
-        idleResetMinutes: sessionConfig.idleResetMinutes ?? 30,
+        idleResetMinutes: sessionConfig.idleResetMinutes ?? 720,
         maxTranscriptLines: sessionConfig.maxTranscriptLines ?? 500,
+        dailyResetHourUTC: sessionConfig.dailyResetHourUTC ?? 9,
       });
       sessionManagers.set(ws.id, mgr);
       usageTrackers.set(ws.id, new UsageTracker(resolve(ws.path, 'data')));
@@ -444,8 +446,9 @@ async function main() {
     const mgr = new SessionManager({
       sessionsDir: resolve(ws.path, 'sessions'),
       workspaceId: ws.id,
-      idleResetMinutes: sessionConfig.idleResetMinutes ?? 30,
+      idleResetMinutes: sessionConfig.idleResetMinutes ?? 720,
       maxTranscriptLines: sessionConfig.maxTranscriptLines ?? 500,
+      dailyResetHourUTC: sessionConfig.dailyResetHourUTC ?? 9,
     });
     sessionManagers.set(ws.id, mgr);
     usageTrackers.set(ws.id, new UsageTracker(resolve(ws.path, 'data')));
@@ -486,16 +489,20 @@ async function main() {
     wsConfig: typeof config.workspaces[0],
     sessionMgr: SessionManager,
   ): Promise<{ agent: AgentProfile; agentId: string; isNew: boolean }> {
-    // 1. Session already has an agent assigned
-    if (session.agentId && agentRegistry.has(session.agentId)) {
-      return { agent: agentRegistry.get(session.agentId)!, agentId: session.agentId, isNew: false };
-    }
-
-    // 2. Emoji detection in user message
+    // 1. Emoji detection in user message (always takes priority for explicit switches)
     const emojiMatch = agentRegistry.matchEmoji(userMessage);
     if (emojiMatch) {
+      if (session.agentId === emojiMatch) {
+        // Already on the requested agent, no switch needed
+        return { agent: agentRegistry.get(emojiMatch)!, agentId: emojiMatch, isNew: false };
+      }
       await sessionMgr.setAgentId(session.id, emojiMatch);
       return { agent: agentRegistry.get(emojiMatch)!, agentId: emojiMatch, isNew: true };
+    }
+
+    // 2. Session already has an agent assigned
+    if (session.agentId && agentRegistry.has(session.agentId)) {
+      return { agent: agentRegistry.get(session.agentId)!, agentId: session.agentId, isNew: false };
     }
 
     // 3. Workspace default agent
@@ -1852,9 +1859,44 @@ async function main() {
         ? agentRegistry.get(job.agentId)!
         : wsForJob.agent;
 
+      // Wrap sendMessage so any message delivered to the target channel
+      // (whether via the send_message tool or the post-run delivery below)
+      // is also recorded in that channel's session transcript. This gives
+      // the agent context when the user replies to a cron-delivered message.
+      let deliverySession: import('@scooby/core').SessionMetadata | null = null;
+      const cronSendMessage = async (channelType: string, msg: OutboundMessage) => {
+        await sendMessage(channelType, msg);
+
+        // Record in the delivery channel's session if this targets the job's delivery channel
+        if (
+          job.delivery &&
+          channelType === job.delivery.channel &&
+          msg.conversationId === job.delivery.conversationId
+        ) {
+          if (!deliverySession) {
+            deliverySession = await sessionMgr.getOrCreate(
+              job.delivery.channel,
+              job.delivery.conversationId,
+            );
+          }
+          await sessionMgr.appendTranscript(deliverySession.id, {
+            timestamp: new Date().toISOString(),
+            role: 'assistant',
+            content: msg.text,
+            metadata: {
+              source: 'cron',
+              cronJobId: job.id,
+              cronJobName: job.name ?? job.id,
+            },
+          });
+        }
+      };
+
       const toolCtx = job.delivery
         ? buildToolContext(wsForJob, session.id, workspaceId, job.delivery.channel, job.delivery.conversationId)
         : buildToolContext(wsForJob, session.id, workspaceId);
+      // Use the recording wrapper for cron tool context
+      toolCtx.sendMessage = cronSendMessage;
 
       const agentRunner = new AgentRunner(toolRegistry, cooldowns, sessionMgr);
       let response = '';
@@ -1881,9 +1923,11 @@ async function main() {
         }
       }
 
-      // Delivery routing
+      // Delivery routing — if the agent produced a text response (beyond
+      // what it may have already sent via the send_message tool), deliver
+      // it to the target channel. cronSendMessage handles recording.
       if (response && job.delivery) {
-        await sendMessage(job.delivery.channel, {
+        await cronSendMessage(job.delivery.channel, {
           conversationId: job.delivery.conversationId,
           text: response,
           format: 'markdown',

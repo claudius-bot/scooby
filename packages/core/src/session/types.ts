@@ -26,6 +26,10 @@ export interface TranscriptEntry {
     tokenUsage?: { prompt: number; completion: number };
     escalated?: boolean;
     escalationReason?: string;
+    /** Where the message originated, e.g. 'cron' for scheduled task delivery */
+    source?: string;
+    cronJobId?: string;
+    cronJobName?: string;
   };
 }
 

@@ -11,6 +11,7 @@ export const UNIVERSAL_TOOLS = [
   'scratchpad_write',
   'send_message',
   'agent_switch',
+  'web_search',
 ];
 
 export class ToolRegistry {

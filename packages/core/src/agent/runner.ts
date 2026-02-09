@@ -294,10 +294,12 @@ export class AgentRunner {
         }
       }
 
-      // If model produced no text but did call tools, use the last tool result as response
-      if (!fullResponse && lastToolResult) {
-        fullResponse = lastToolResult;
-      }
+      // If model produced no text but did call tools, do NOT dump raw tool
+      // results as the response — they are intermediate data (e.g. JSON from
+      // web_search/web_fetch) and not meant to be shown verbatim to the user.
+      // The model should always generate a natural-language summary after
+      // using tools; if it didn't, leave the response empty rather than
+      // surfacing raw JSON.
 
       // Record final response to transcript
       if (fullResponse) {

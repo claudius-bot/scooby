@@ -8,8 +8,9 @@ import { makeSessionKey } from './types.js';
 export interface SessionManagerConfig {
   sessionsDir: string;          // e.g., workspaces/foo/sessions
   workspaceId: string;
-  idleResetMinutes: number;     // default 30
+  idleResetMinutes: number;     // default 720 (12 hours)
   maxTranscriptLines: number;   // default 500
+  dailyResetHourUTC?: number;   // hour (0-23) in UTC for daily session reset, default 9 (4 AM EST)
 }
 
 export class SessionManager {
@@ -213,8 +214,33 @@ export class SessionManager {
 
   private isSessionIdle(session: SessionMetadata): boolean {
     const lastActive = new Date(session.lastActiveAt).getTime();
+    const now = Date.now();
+
+    // Check inactivity threshold
     const idleThreshold = this.config.idleResetMinutes * 60 * 1000;
-    return Date.now() - lastActive > idleThreshold;
+    if (now - lastActive > idleThreshold) {
+      return true;
+    }
+
+    // Check daily reset: session should reset if a 4:00 AM EST boundary
+    // has passed since the session was last active.
+    const dailyResetHourUTC = this.config.dailyResetHourUTC ?? 9; // 4 AM EST = 9 UTC
+    const lastActiveDate = new Date(lastActive);
+    const nowDate = new Date(now);
+
+    // Find the most recent reset boundary before now
+    const todayReset = new Date(nowDate);
+    todayReset.setUTCHours(dailyResetHourUTC, 0, 0, 0);
+    const resetBoundary = todayReset.getTime() <= now
+      ? todayReset.getTime()
+      : todayReset.getTime() - 24 * 60 * 60 * 1000; // yesterday's reset
+
+    // If last activity was before the most recent reset boundary, the session is stale
+    if (lastActive < resetBoundary) {
+      return true;
+    }
+
+    return false;
   }
 
   private async compactTranscript(sessionId: string): Promise<void> {
