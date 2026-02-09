@@ -494,9 +494,10 @@ async function main() {
     const emojiMatch = agentRegistry.matchEmoji(userMessage);
     if (emojiMatch) {
       if (session.agentId === emojiMatch) {
-        // Already on the requested agent, no switch needed
+        console.log(`[Scooby] resolveAgent: emoji ${emojiMatch} detected, already active`);
         return { agent: agentRegistry.get(emojiMatch)!, agentId: emojiMatch, isNew: false };
       }
+      console.log(`[Scooby] resolveAgent: emoji switch ${session.agentId ?? 'none'} -> ${emojiMatch}`);
       await sessionMgr.setAgentId(session.id, emojiMatch);
       return { agent: agentRegistry.get(emojiMatch)!, agentId: emojiMatch, isNew: true };
     }

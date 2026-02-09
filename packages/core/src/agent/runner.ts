@@ -313,6 +313,8 @@ export class AgentRunner {
             escalated: escState.escalated,
             escalationReason: escState.reason,
             tokenUsage: { prompt: totalPromptTokens, completion: totalCompletionTokens },
+            agentId: options.agent.id,
+            agentName: options.agentName ?? options.agent.name,
           },
         });
       }
