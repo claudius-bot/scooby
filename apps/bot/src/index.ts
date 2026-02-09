@@ -9,6 +9,7 @@ import {
   type ScoobyConfig,
   type MemoryConfig,
   ToolRegistry,
+  UNIVERSAL_TOOLS,
   type ToolContext,
   type OutboundMessage,
   setAiGatewayConfig,
@@ -1013,6 +1014,8 @@ async function main() {
           modelGroup: t.modelGroup,
         }));
       },
+
+      getUniversalTools: () => UNIVERSAL_TOOLS,
 
       getSession: async (workspaceId: string, sessionId: string) => {
         const mgr = sessionManagers.get(workspaceId);

@@ -25,6 +25,7 @@ export interface ApiContext {
   getCronHistory?: (workspaceId: string, limit?: number) => Promise<any[]>;
   listChannelBindings?: (workspaceId: string) => Promise<any[]>;
   listTools?: () => Promise<any[]>;
+  getUniversalTools?: () => string[];
   getSession?: (workspaceId: string, sessionId: string) => Promise<any | null>;
   getSystemStatus?: () => Promise<any>;
 
@@ -162,7 +163,8 @@ export function createApi(ctx: ApiContext) {
   app.get('/tools', async (c) => {
     if (!ctx.listTools) return c.json({ error: 'Not implemented' }, 404);
     const tools = await ctx.listTools();
-    return c.json({ tools });
+    const universalTools = ctx.getUniversalTools?.() ?? [];
+    return c.json({ tools, universalTools });
   });
 
   // GET /api/system/status

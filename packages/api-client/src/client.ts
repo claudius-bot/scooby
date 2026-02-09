@@ -32,7 +32,7 @@ const WorkspacesResponseSchema = z.object({ workspaces: z.array(WorkspaceSummary
 const AgentsResponseSchema = z.object({ agents: z.array(AgentDetailSchema) });
 const SessionsResponseSchema = z.object({ sessions: z.array(SessionMetadataSchema) });
 const TranscriptResponseSchema = z.object({ transcript: z.array(TranscriptEntrySchema) });
-const ToolsResponseSchema = z.object({ tools: z.array(ToolSummarySchema) });
+const ToolsResponseSchema = z.object({ tools: z.array(ToolSummarySchema), universalTools: z.array(z.string()).default([]) });
 const FilesResponseSchema = z.object({ files: z.array(FileEntrySchema) });
 const MemoryFilesResponseSchema = z.object({ files: z.array(z.object({ name: z.string(), path: z.string(), size: z.number() })) });
 const MemorySearchResponseSchema = z.object({ results: z.array(z.object({ source: z.string(), content: z.string(), score: z.number() })) });
@@ -155,7 +155,7 @@ export function createGatewayClient(config: GatewayClientConfig) {
 
     // ── Tools ──────────────────────────────────────────────────────
     tools: {
-      list: () => get('/api/tools', ToolsResponseSchema).then(r => r.tools),
+      list: () => get('/api/tools', ToolsResponseSchema).then(r => ({ tools: r.tools, universalTools: r.universalTools })),
     },
 
     // ── Workspaces ─────────────────────────────────────────────────

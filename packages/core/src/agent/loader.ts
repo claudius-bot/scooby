@@ -48,6 +48,9 @@ export async function loadAgentDefinitions(agentsDir: string): Promise<Map<strin
     return agents;
   }
 
+  // Load shared TOOLS.md from the agents root (universal tool docs for all agents)
+  const sharedTools = await safeRead(join(agentsDir, 'TOOLS.md'));
+
   for (const entry of entries) {
     const agentDir = join(agentsDir, entry);
     const stats = await stat(agentDir).catch(() => null);
@@ -85,6 +88,9 @@ export async function loadAgentDefinitions(agentsDir: string): Promise<Map<strin
       detectAvatar(agentDir),
     ]);
 
+    // Combine shared universal TOOLS.md with agent-specific TOOLS.md
+    const combinedTools = [sharedTools, tools].filter(Boolean).join('\n\n---\n\n');
+
     const profile: AgentProfile = {
       name: def.name,
       vibe: '',
@@ -92,7 +98,7 @@ export async function loadAgentDefinitions(agentsDir: string): Promise<Map<strin
       avatar: avatarFile || def.avatar,
       soul,
       identity,
-      tools,
+      tools: combinedTools,
       configured: true,
       scratchpad,
       heartbeatChecklist: '',

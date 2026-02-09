@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils';
 interface ToolPickerProps {
   availableTools: ToolSummary[];
   selectedTools: string[];
+  universalTools: string[];
   onChange: (tools: string[]) => void;
 }
 
@@ -34,7 +35,14 @@ function getToolGroup(name: string): string {
   return 'Other';
 }
 
-export function ToolPicker({ availableTools, selectedTools, onChange }: ToolPickerProps) {
+export function ToolPicker({
+  availableTools,
+  selectedTools,
+  universalTools,
+  onChange,
+}: ToolPickerProps) {
+  const universalSet = new Set(universalTools);
+
   const toggle = (toolName: string) => {
     if (selectedTools.includes(toolName)) {
       onChange(selectedTools.filter((t) => t !== toolName));
@@ -47,9 +55,7 @@ export function ToolPicker({ availableTools, selectedTools, onChange }: ToolPick
   const disableAll = () => onChange([]);
 
   if (availableTools.length === 0) {
-    return (
-      <p className="text-sm text-neutral-400 py-6 text-center">No tools available</p>
-    );
+    return <p className="text-sm text-neutral-400 py-6 text-center">No tools available</p>;
   }
 
   // Group tools
@@ -68,8 +74,11 @@ export function ToolPicker({ availableTools, selectedTools, onChange }: ToolPick
       {/* Header */}
       <div className="flex items-center justify-between">
         <p className="text-sm text-neutral-500">
-          <span className="font-semibold text-neutral-900 tabular-nums">{selectedCount}</span>
-          /{availableTools.length} tools enabled
+          <span className="font-semibold text-neutral-900 tabular-nums">{selectedCount}</span>/
+          {availableTools.length} tools enabled
+          {universalTools.length > 0 && (
+            <span className="text-neutral-400"> + {universalTools.length} universal</span>
+          )}
         </p>
         <div className="flex items-center gap-1">
           <button
@@ -89,7 +98,9 @@ export function ToolPicker({ availableTools, selectedTools, onChange }: ToolPick
 
       {/* Grouped tool grid */}
       {Array.from(grouped.entries()).map(([group, tools]) => {
-        const groupSelected = tools.filter((t) => selectedTools.includes(t.name)).length;
+        const groupSelected = tools.filter(
+          (t) => selectedTools.includes(t.name) || universalSet.has(t.name)
+        ).length;
         return (
           <div key={group}>
             <div className="flex items-center gap-2 mb-2">
@@ -100,35 +111,60 @@ export function ToolPicker({ availableTools, selectedTools, onChange }: ToolPick
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
               {tools.map((tool) => {
-                const checked = selectedTools.includes(tool.name);
+                const isUniversal = universalSet.has(tool.name);
+                const checked = isUniversal || selectedTools.includes(tool.name);
                 return (
                   <div
                     key={tool.name}
                     className={cn(
                       'flex items-center justify-between gap-3 rounded-lg border px-3 py-2.5 transition-colors',
-                      checked
-                        ? 'border-neutral-200 bg-white'
-                        : 'border-neutral-100 bg-neutral-50/50',
+                      isUniversal
+                        ? 'border-accent-200 bg-accent-50/50'
+                        : checked
+                          ? 'border-neutral-200 bg-white'
+                          : 'border-neutral-100 bg-neutral-50/50'
                     )}
                   >
                     <div className="min-w-0">
-                      <p className={cn(
-                        'text-[13px] font-medium',
-                        checked ? 'text-neutral-900' : 'text-neutral-500',
-                      )}>
-                        {tool.name}
-                      </p>
+                      <div className="flex items-center gap-1.5">
+                        <p
+                          className={cn(
+                            'text-[13px] font-medium',
+                            isUniversal
+                              ? 'text-accent-700'
+                              : checked
+                                ? 'text-neutral-900'
+                                : 'text-neutral-500'
+                          )}
+                        >
+                          {tool.name}
+                        </p>
+                        {isUniversal && (
+                          <span className="text-[10px] font-medium text-accent-600 bg-accent-100 px-1.5 py-0.5 rounded-full leading-none">
+                            always on
+                          </span>
+                        )}
+                      </div>
                       {tool.description && (
                         <p className="text-[11px] text-neutral-400 truncate leading-tight mt-0.5">
                           {tool.description}
                         </p>
                       )}
                     </div>
-                    <Switch
-                      checked={checked}
-                      onCheckedChange={() => toggle(tool.name)}
-                      className="shrink-0"
-                    />
+                    {isUniversal ? (
+                      <div
+                        className="shrink-0 w-9 h-5 rounded-full bg-accent-500 flex items-center justify-end px-0.5 cursor-not-allowed"
+                        title="Universal tool — always available to all agents"
+                      >
+                        <div className="w-4 h-4 rounded-full bg-white shadow-sm" />
+                      </div>
+                    ) : (
+                      <Switch
+                        checked={checked}
+                        onCheckedChange={() => toggle(tool.name)}
+                        className="shrink-0"
+                      />
+                    )}
                   </div>
                 );
               })}

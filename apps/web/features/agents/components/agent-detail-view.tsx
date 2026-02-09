@@ -33,9 +33,10 @@ type TabId = (typeof TABS)[number]['id'];
 interface AgentDetailViewProps {
   agent: AgentDetail;
   availableTools: ToolSummary[];
+  universalTools: string[];
 }
 
-export function AgentDetailView({ agent, availableTools }: AgentDetailViewProps) {
+export function AgentDetailView({ agent, availableTools, universalTools }: AgentDetailViewProps) {
   const { data: files, isLoading: filesLoading } = useGateway.agents.files({ id: agent.id });
   const [activeTab, setActiveTab] = useState<TabId>('soul');
 
@@ -174,6 +175,7 @@ export function AgentDetailView({ agent, availableTools }: AgentDetailViewProps)
         <ToolPicker
           availableTools={availableTools}
           selectedTools={tools}
+          universalTools={universalTools}
           onChange={setTools}
         />
       )}

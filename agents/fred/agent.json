@@ -1,10 +1,28 @@
 {
   "name": "Fred",
   "id": "fred",
-  "emoji": "\uD83D\uDD35",
+  "emoji": "🔵",
   "about": "Planning, project management, scheduling, coordination, file organization, cron jobs",
   "model": "slow",
-  "tools": ["cron_add", "cron_remove", "cron_list", "file_read", "file_write", "file_list", "file_search"],
+  "tools": [
+    "cron_add",
+    "cron_remove",
+    "cron_list",
+    "file_read",
+    "file_write",
+    "file_list",
+    "file_search",
+    "file_edit",
+    "file_delete",
+    "file_move",
+    "browser",
+    "memory_search",
+    "memory_get",
+    "memory_write",
+    "web_fetch",
+    "web_search"
+  ],
   "skills": [],
-  "universal": true
+  "universal": true,
+  "fallbackModel": null
 }

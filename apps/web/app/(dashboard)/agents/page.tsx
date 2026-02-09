@@ -63,7 +63,9 @@ function EmptyState() {
 
 export default function AgentsPage() {
   const { data: agents, isLoading } = useGateway.agents.list();
-  const { data: tools = [] } = useGateway.tools.list();
+  const { data: toolsData } = useGateway.tools.list();
+  const tools = toolsData?.tools ?? [];
+  const universalTools = toolsData?.universalTools ?? [];
 
   const [activeId, setActiveId] = useQueryState(
     'agent',
@@ -134,6 +136,7 @@ export default function AgentsPage() {
               key={activeAgent.id}
               agent={activeAgent}
               availableTools={tools}
+              universalTools={universalTools}
             />
           ) : (
             <div className="flex items-center justify-center h-64 text-sm text-neutral-400">
