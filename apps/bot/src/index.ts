@@ -1,14 +1,16 @@
-import { resolve, dirname, basename } from 'node:path';
+import { resolve, dirname, basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { copyFile, mkdir, unlink } from 'node:fs/promises';
+import { copyFile, mkdir, unlink, readdir, stat, readFile, writeFile } from 'node:fs/promises';
 import { config as loadEnv } from 'dotenv';
 import {
   loadConfig,
+  createCachedConfigLoader,
   loadWorkspace,
   type Workspace,
   type ScoobyConfig,
   type MemoryConfig,
   ToolRegistry,
+  UNIVERSAL_TOOLS,
   type ToolContext,
   type OutboundMessage,
   setAiGatewayConfig,
@@ -72,7 +74,13 @@ import {
   type InboundMessage,
   type ChannelAdapter,
 } from '@scooby/channels';
-import { GatewayServer, createChatCompletionsApi } from '@scooby/gateway';
+import {
+  GatewayServer,
+  createChatCompletionsApi,
+  ChatSendParamsSchema,
+  ChatHistoryParamsSchema,
+  SessionListParamsSchema,
+} from '@scooby/gateway';
 import {
   CommandProcessor,
   createDefaultRegistry,
@@ -88,7 +96,17 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // Load .env from project root
 loadEnv({ path: resolve(__dirname, '..', '..', '..', '.env') });
 
+// Strip embedded line breaks from API keys/tokens that may have been
+// introduced by copy-pasting from password managers or web UIs.
+const KEY_SUFFIXES = ['_KEY', '_TOKEN', '_SECRET'];
+for (const [key, value] of Object.entries(process.env)) {
+  if (value && KEY_SUFFIXES.some((s) => key.endsWith(s)) && /[\r\n]/.test(value)) {
+    process.env[key] = value.replace(/[\r\n]+/g, '');
+  }
+}
+
 async function main() {
+  const startTime = Date.now();
   console.log('[Scooby] Starting...');
 
   // 1. Load config
@@ -109,11 +127,13 @@ async function main() {
   const agentRegistry = new AgentRegistry(agentProfiles);
   console.log(`[Scooby] Loaded ${agentProfiles.size} agents: ${Array.from(agentProfiles.keys()).join(', ')}`);
 
-  // 1d. Create agent router
+  // 1d. Create agent router (with live config reload for routing changes)
+  const cachedConfigLoader = createCachedConfigLoader(configPath);
   const agentRouter = new AgentRouter(
     agentRegistry,
     config.models.fast.candidates,
     config.routing,
+    cachedConfigLoader,
   );
 
   // 2. Load workspaces
@@ -193,13 +213,14 @@ async function main() {
 
   // 5. Create session managers per workspace
   const sessionManagers = new Map<string, SessionManager>();
-  const sessionConfig = config.session ?? { idleResetMinutes: 30, maxTranscriptLines: 500 };
+  const sessionConfig = config.session ?? { idleResetMinutes: 720, maxTranscriptLines: 500, dailyResetHourUTC: 9 };
   for (const [id, ws] of workspaces) {
     const mgr = new SessionManager({
       sessionsDir: resolve(ws.path, 'sessions'),
       workspaceId: id,
-      idleResetMinutes: sessionConfig.idleResetMinutes ?? 30,
+      idleResetMinutes: sessionConfig.idleResetMinutes ?? 720,
       maxTranscriptLines: sessionConfig.maxTranscriptLines ?? 500,
+      dailyResetHourUTC: sessionConfig.dailyResetHourUTC ?? 9,
     });
     sessionManagers.set(id, mgr);
   }
@@ -260,6 +281,9 @@ async function main() {
       summarizeSession(sid, wid, mgr).catch((err) => {
         console.error(`[Scooby] Summarization error:`, err);
       });
+
+      // Emit session.archived event
+      gateway.broadcastToTopic('session.archived', { workspaceId: wid, sessionId: sid }, wid);
 
       // QMD session export
       const provider = memoryProviders.get(wid);
@@ -408,8 +432,9 @@ async function main() {
       const mgr = new SessionManager({
         sessionsDir: resolve(ws.path, 'sessions'),
         workspaceId: ws.id,
-        idleResetMinutes: sessionConfig.idleResetMinutes ?? 30,
+        idleResetMinutes: sessionConfig.idleResetMinutes ?? 720,
         maxTranscriptLines: sessionConfig.maxTranscriptLines ?? 500,
+        dailyResetHourUTC: sessionConfig.dailyResetHourUTC ?? 9,
       });
       sessionManagers.set(ws.id, mgr);
       usageTrackers.set(ws.id, new UsageTracker(resolve(ws.path, 'data')));
@@ -434,8 +459,9 @@ async function main() {
     const mgr = new SessionManager({
       sessionsDir: resolve(ws.path, 'sessions'),
       workspaceId: ws.id,
-      idleResetMinutes: sessionConfig.idleResetMinutes ?? 30,
+      idleResetMinutes: sessionConfig.idleResetMinutes ?? 720,
       maxTranscriptLines: sessionConfig.maxTranscriptLines ?? 500,
+      dailyResetHourUTC: sessionConfig.dailyResetHourUTC ?? 9,
     });
     sessionManagers.set(ws.id, mgr);
     usageTrackers.set(ws.id, new UsageTracker(resolve(ws.path, 'data')));
@@ -468,7 +494,7 @@ async function main() {
   // ── Agent resolution helper ───────────────────────────────────────
   /**
    * Resolve which agent should handle a message for a given session.
-   * Priority: session.agentId > emoji detection > workspace default > router > fallback
+   * Priority: emoji detection > session.agentId > workspace default > router > fallback
    */
   async function resolveAgent(
     session: import('@scooby/core').SessionMetadata,
@@ -476,16 +502,21 @@ async function main() {
     wsConfig: typeof config.workspaces[0],
     sessionMgr: SessionManager,
   ): Promise<{ agent: AgentProfile; agentId: string; isNew: boolean }> {
-    // 1. Session already has an agent assigned
-    if (session.agentId && agentRegistry.has(session.agentId)) {
-      return { agent: agentRegistry.get(session.agentId)!, agentId: session.agentId, isNew: false };
-    }
-
-    // 2. Emoji detection in user message
+    // 1. Emoji detection in user message (always takes priority for explicit switches)
     const emojiMatch = agentRegistry.matchEmoji(userMessage);
     if (emojiMatch) {
+      if (session.agentId === emojiMatch) {
+        console.log(`[Scooby] resolveAgent: emoji ${emojiMatch} detected, already active`);
+        return { agent: agentRegistry.get(emojiMatch)!, agentId: emojiMatch, isNew: false };
+      }
+      console.log(`[Scooby] resolveAgent: emoji switch ${session.agentId ?? 'none'} -> ${emojiMatch}`);
       await sessionMgr.setAgentId(session.id, emojiMatch);
       return { agent: agentRegistry.get(emojiMatch)!, agentId: emojiMatch, isNew: true };
+    }
+
+    // 2. Session already has an agent assigned
+    if (session.agentId && agentRegistry.has(session.agentId)) {
+      return { agent: agentRegistry.get(session.agentId)!, agentId: session.agentId, isNew: false };
     }
 
     // 3. Workspace default agent
@@ -643,7 +674,7 @@ async function main() {
 
   // 10. Gateway server
   const gatewayConfig = config.gateway ?? { host: '0.0.0.0', port: 3000 };
-  const gateway = new GatewayServer(
+  const gateway: GatewayServer = new GatewayServer(
     {
       host: gatewayConfig.host ?? '0.0.0.0',
       port: gatewayConfig.port ?? 3000,
@@ -657,7 +688,7 @@ async function main() {
             name: ws.agent.name,
             vibe: ws.agent.vibe,
             emoji: ws.agent.emoji,
-            avatar: ws.agent.avatar,
+            avatar: ws.agent.avatar && ws.agent.id ? `/api/agents/${ws.agent.id}/avatar` : '',
           },
         }));
       },
@@ -748,6 +779,364 @@ async function main() {
         console.log(`[Scooby] Phone call webhook: injected result for conversation ${conversationId}`);
         return { ok: true };
       },
+
+      // ── New read callbacks ────────────────────────────────────────────
+      listAgents: async () => {
+        return agentRegistry.listEntries().map(([id, a]) => ({
+          id,
+          name: a.name,
+          emoji: a.emoji,
+          avatar: a.avatar ? `/api/agents/${id}/avatar` : '',
+          about: a.about ?? '',
+          model: a.modelRef ?? 'fast',
+          fallbackModel: a.fallbackModelRef,
+          tools: a.allowedTools ?? [],
+          skills: a.skillNames ?? [],
+          universal: a.universalTools !== false,
+        }));
+      },
+
+      getAgent: async (id: string) => {
+        const a = agentRegistry.get(id);
+        if (!a) return null;
+        return {
+          id: a.id ?? id,
+          name: a.name,
+          emoji: a.emoji,
+          avatar: a.avatar ? `/api/agents/${id}/avatar` : '',
+          about: a.about ?? '',
+          model: a.modelRef ?? 'fast',
+          fallbackModel: a.fallbackModelRef,
+          tools: a.allowedTools ?? [],
+          skills: a.skillNames ?? [],
+          universal: a.universalTools !== false,
+        };
+      },
+
+      getAgentAvatar: async (id: string) => {
+        const a = agentRegistry.get(id);
+        if (!a?.avatar) return null;
+        const avatarPath = join(agentsDir, id, a.avatar);
+        try {
+          const buf = await readFile(avatarPath);
+          const ext = a.avatar.split('.').pop()?.toLowerCase() ?? '';
+          const contentTypes: Record<string, string> = {
+            jpg: 'image/jpeg',
+            jpeg: 'image/jpeg',
+            png: 'image/png',
+            webp: 'image/webp',
+            gif: 'image/gif',
+            svg: 'image/svg+xml',
+          };
+          return { data: buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer, contentType: contentTypes[ext] ?? 'application/octet-stream' };
+        } catch {
+          return null;
+        }
+      },
+
+      getAgentFiles: async (id: string) => {
+        const a = agentRegistry.get(id);
+        if (!a) return null;
+        return { identity: a.identity, soul: a.soul, tools: a.tools };
+      },
+
+      updateAgent: async (id: string, updates: Record<string, unknown>) => {
+        const { AgentUpdateSchema } = await import('@scooby/schemas');
+        const parsed = AgentUpdateSchema.parse(updates);
+        const a = agentRegistry.get(id);
+        if (!a) throw new Error(`Agent not found: ${id}`);
+
+        // Read current agent.json, merge updates, write back
+        const agentJsonPath = join(agentsDir, id, 'agent.json');
+        const raw = await readFile(agentJsonPath, 'utf-8');
+        const current = JSON.parse(raw);
+        if (parsed.name !== undefined) current.name = parsed.name;
+        if (parsed.emoji !== undefined) current.emoji = parsed.emoji;
+        if (parsed.about !== undefined) current.about = parsed.about;
+        if (parsed.model !== undefined) current.model = parsed.model;
+        if (parsed.fallbackModel !== undefined) current.fallbackModel = parsed.fallbackModel;
+        if (parsed.tools !== undefined) current.tools = parsed.tools;
+        if (parsed.skills !== undefined) current.skills = parsed.skills;
+        if (parsed.universal !== undefined) current.universal = parsed.universal;
+        await writeFile(agentJsonPath, JSON.stringify(current, null, 2), 'utf-8');
+
+        // Sync in-memory state
+        agentRegistry.update(id, parsed);
+        return { ok: true };
+      },
+
+      updateAgentFile: async (id: string, fileName: string, content: string) => {
+        const allowedFiles: Record<string, string> = {
+          identity: 'IDENTITY.md',
+          soul: 'SOUL.md',
+          tools: 'TOOLS.md',
+        };
+        const diskName = allowedFiles[fileName];
+        if (!diskName) throw new Error(`Invalid file name: ${fileName}`);
+
+        const a = agentRegistry.get(id);
+        if (!a) throw new Error(`Agent not found: ${id}`);
+
+        const filePath = join(agentsDir, id, diskName);
+        await writeFile(filePath, content, 'utf-8');
+
+        // Sync in-memory state
+        agentRegistry.updateFile(id, fileName as 'identity' | 'soul' | 'tools', content);
+        return { ok: true };
+      },
+
+      getWorkspaceDetail: async (id: string) => {
+        const ws = workspaces.get(id);
+        if (!ws) return null;
+        const wsConfig = config.workspaces.find(w => w.id === id);
+        const overrides = await modelOverrideStores.get(id)?.getWorkspaceModels();
+        return {
+          id: ws.id,
+          path: ws.path,
+          agent: {
+            name: ws.agent.name,
+            vibe: ws.agent.vibe,
+            emoji: ws.agent.emoji,
+            avatar: ws.agent.avatar && ws.agent.id ? `/api/agents/${ws.agent.id}/avatar` : '',
+          },
+          defaultAgent: wsConfig?.defaultAgent ?? agentRegistry.getDefaultId(),
+          permissions: {
+            allowedTools: ws.permissions.allowedTools ? Array.from(ws.permissions.allowedTools) : null,
+            deniedTools: Array.from(ws.permissions.deniedTools),
+            sandbox: ws.permissions.sandbox,
+          },
+          heartbeat: ws.config.heartbeat ? {
+            enabled: ws.config.heartbeat.enabled ?? false,
+            intervalMinutes: ws.config.heartbeat.intervalMinutes,
+          } : undefined,
+          modelOverrides: overrides ?? undefined,
+        };
+      },
+
+      listWorkspaceFiles: async (workspaceId: string, subpath?: string) => {
+        const ws = workspaces.get(workspaceId);
+        if (!ws) return [];
+        const targetDir = subpath ? resolve(ws.path, subpath) : ws.path;
+        // Path traversal protection
+        if (!targetDir.startsWith(ws.path)) return [];
+        try {
+          const entries = await readdir(targetDir, { withFileTypes: true });
+          const result = [];
+          for (const entry of entries) {
+            const fullPath = join(targetDir, entry.name);
+            try {
+              const stats = await stat(fullPath);
+              result.push({
+                name: entry.name,
+                path: fullPath.slice(ws.path.length + 1),
+                type: entry.isDirectory() ? 'directory' : 'file',
+                size: stats.size,
+                modifiedAt: stats.mtime.toISOString(),
+              });
+            } catch {
+              // Skip files we can't stat
+            }
+          }
+          return result;
+        } catch {
+          return [];
+        }
+      },
+
+      readWorkspaceFile: async (workspaceId: string, filePath: string) => {
+        const ws = workspaces.get(workspaceId);
+        if (!ws) return null;
+        const fullPath = resolve(ws.path, filePath);
+        // Path traversal protection
+        if (!fullPath.startsWith(ws.path)) return null;
+        try {
+          const content = await readFile(fullPath, 'utf-8');
+          return { content, path: filePath };
+        } catch {
+          return null;
+        }
+      },
+
+      searchMemory: async (workspaceId: string, query: string, limit?: number) => {
+        const provider = memoryProviders.get(workspaceId);
+        if (!provider || !query) return [];
+        const results = await provider.search(workspaceId, query, limit);
+        return results.map(r => ({ source: r.source, content: r.content, score: r.score }));
+      },
+
+      listMemoryFiles: async (workspaceId: string) => {
+        const ws = workspaces.get(workspaceId);
+        if (!ws) return [];
+        const memoryDir = resolve(ws.path, 'memory');
+        try {
+          const entries = await readdir(memoryDir, { withFileTypes: true });
+          const result = [];
+          for (const entry of entries) {
+            if (!entry.isFile()) continue;
+            const fullPath = join(memoryDir, entry.name);
+            try {
+              const stats = await stat(fullPath);
+              result.push({
+                name: entry.name,
+                path: fullPath.slice(ws.path.length + 1),
+                size: stats.size,
+              });
+            } catch {
+              // Skip files we can't stat
+            }
+          }
+          return result;
+        } catch {
+          return [];
+        }
+      },
+
+      readMemoryFile: async (workspaceId: string, fileName: string) => {
+        const ws = workspaces.get(workspaceId);
+        if (!ws) return null;
+        const fullPath = resolve(ws.path, 'memory', fileName);
+        // Path traversal protection
+        if (!fullPath.startsWith(resolve(ws.path, 'memory'))) return null;
+        try {
+          return await readFile(fullPath, 'utf-8');
+        } catch {
+          return null;
+        }
+      },
+
+      listChannelBindings: async (workspaceId: string) => {
+        return router.getBindingsForWorkspace(workspaceId);
+      },
+
+      listCronJobs: async (workspaceId: string) => {
+        const scheduler = cronSchedulers.get(workspaceId);
+        if (!scheduler) return [];
+        return scheduler.listJobs();
+      },
+
+      getCronHistory: async (workspaceId: string, limit?: number) => {
+        const scheduler = cronSchedulers.get(workspaceId);
+        if (!scheduler) return [];
+        return scheduler.getHistory(limit);
+      },
+
+      listTools: async () => {
+        return toolRegistry.list().map(t => ({
+          name: t.name,
+          description: t.description,
+          modelGroup: t.modelGroup,
+        }));
+      },
+
+      getUniversalTools: () => UNIVERSAL_TOOLS,
+
+      getSession: async (workspaceId: string, sessionId: string) => {
+        const mgr = sessionManagers.get(workspaceId);
+        if (!mgr) return null;
+        const sessions = await mgr.listSessions();
+        return sessions.find(s => s.id === sessionId) ?? null;
+      },
+
+      getSystemStatus: async () => {
+        let activeSessionCount = 0;
+        for (const mgr of sessionManagers.values()) {
+          const sessions = await mgr.listSessions();
+          activeSessionCount += sessions.filter(s => s.status === 'active').length;
+        }
+        return {
+          uptime: Date.now() - startTime,
+          activeConnections: gateway.getConnections().count,
+          workspaceCount: workspaces.size,
+          activeSessionCount,
+          channels: channelAdapters.map(a => a.type),
+          models: {
+            fast: config.models.fast.candidates.map(c => `${c.provider}/${c.model}`),
+            slow: config.models.slow.candidates.map(c => `${c.provider}/${c.model}`),
+          },
+        };
+      },
+
+      // ── New write callbacks ───────────────────────────────────────────
+      updateWorkspaceConfig: async (workspaceId: string, updates: Record<string, unknown>) => {
+        const ws = workspaces.get(workspaceId);
+        if (!ws) throw new Error(`Workspace not found: ${workspaceId}`);
+        // Apply simple config updates (model overrides)
+        const store = modelOverrideStores.get(workspaceId);
+        if (store && updates.models) {
+          const models = updates.models as Record<string, any>;
+          if (models.fast) await store.setGroup('fast', models.fast);
+          if (models.slow) await store.setGroup('slow', models.slow);
+        }
+        gateway.broadcastToTopic('workspace.updated', { workspaceId, changes: updates }, workspaceId);
+        return { ok: true };
+      },
+
+      writeWorkspaceFile: async (workspaceId: string, filePath: string, content: string) => {
+        const ws = workspaces.get(workspaceId);
+        if (!ws) throw new Error(`Workspace not found: ${workspaceId}`);
+        const fullPath = resolve(ws.path, filePath);
+        // Path traversal protection
+        if (!fullPath.startsWith(ws.path)) throw new Error('Path traversal not allowed');
+        await mkdir(dirname(fullPath), { recursive: true });
+        await writeFile(fullPath, content, 'utf-8');
+        return { ok: true };
+      },
+
+      writeMemory: async (workspaceId: string, source: string, content: string) => {
+        const provider = memoryProviders.get(workspaceId);
+        if (!provider) throw new Error('Memory not configured for workspace');
+        const chunks = await provider.index(workspaceId, source, content);
+        return { chunks: typeof chunks === 'number' ? chunks : 1 };
+      },
+
+      deleteMemory: async (workspaceId: string, sourcePrefix: string) => {
+        const provider = memoryProviders.get(workspaceId);
+        if (!provider) throw new Error('Memory not configured for workspace');
+        provider.deleteBySourcePrefix(workspaceId, sourcePrefix);
+        return { ok: true };
+      },
+
+      addCronJob: async (workspaceId: string, job: any) => {
+        const scheduler = cronSchedulers.get(workspaceId);
+        if (!scheduler) throw new Error('Cron not configured for workspace');
+        await scheduler.addJob({ ...job, source: 'agent' });
+        return { ok: true };
+      },
+
+      removeCronJob: async (workspaceId: string, jobId: string) => {
+        const scheduler = cronSchedulers.get(workspaceId);
+        if (!scheduler) throw new Error('Cron not configured for workspace');
+        const removed = await scheduler.removeJob(jobId);
+        if (!removed) throw new Error(`Job not found: ${jobId}`);
+        return { ok: true };
+      },
+
+      triggerCronJob: async (workspaceId: string, jobId: string) => {
+        const scheduler = cronSchedulers.get(workspaceId);
+        if (!scheduler) throw new Error('Cron not configured for workspace');
+        await scheduler.triggerJob(jobId);
+        return { ok: true };
+      },
+
+      archiveSession: async (workspaceId: string, sessionId: string) => {
+        const mgr = sessionManagers.get(workspaceId);
+        if (!mgr) throw new Error('Session manager not found');
+        await mgr.archiveSession(sessionId);
+        gateway.broadcastToTopic('session.archived', { workspaceId, sessionId }, workspaceId);
+        return { ok: true };
+      },
+
+      setSessionAgent: async (workspaceId: string, sessionId: string, agentId: string) => {
+        const mgr = sessionManagers.get(workspaceId);
+        if (!mgr) throw new Error('Session manager not found');
+        await mgr.setAgentId(sessionId, agentId);
+        const agent = agentRegistry.get(agentId);
+        gateway.broadcastToTopic('session.agent-switched', {
+          workspaceId, sessionId, agentId,
+          agentName: agent?.name ?? agentId,
+        }, workspaceId);
+        return { ok: true };
+      },
     },
   );
 
@@ -794,7 +1183,7 @@ async function main() {
 
   // Register WebSocket method handlers
   gateway.registerMethod('chat.send', async (connectionId, params) => {
-    const { workspaceId, text } = params as { workspaceId: string; text: string };
+    const { workspaceId, text, attachments } = ChatSendParamsSchema.parse(params);
     const ws = workspaces.get(workspaceId);
     if (!ws) throw new Error(`Workspace not found: ${workspaceId}`);
 
@@ -903,11 +1292,71 @@ async function main() {
       await performMemoryFlush(workspaceId, session.id, sessionMgr, resolvedAgent);
     }
 
+    // Process web chat attachments (same flow as Telegram)
+    let messageContent = text;
+    let transcriptContent: string | TranscriptContentPart[] = text;
+
+    if (attachments && attachments.length > 0) {
+      const imageParts: TranscriptContentPart[] = [];
+
+      for (const att of attachments) {
+        // Extract base64 data from data URL (strip "data:image/jpeg;base64," prefix)
+        const base64Match = att.dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+        if (!base64Match) continue;
+
+        const mimeType = base64Match[1];
+        const base64Data = base64Match[2];
+        const buffer = Buffer.from(base64Data, 'base64');
+
+        // Determine file type and destination
+        const isImage = mimeType.startsWith('image/');
+        const isAudio = mimeType.startsWith('audio/');
+        const ext = att.name.includes('.') ? att.name.split('.').pop() : (isImage ? 'jpg' : isAudio ? 'ogg' : 'bin');
+        const fileName = `${crypto.randomUUID()}.${ext}`;
+
+        if (isAudio) {
+          const audioDir = resolve(ws.path, 'data', 'audio');
+          await mkdir(audioDir, { recursive: true });
+          const destPath = resolve(audioDir, fileName);
+          await writeFile(destPath, buffer);
+          messageContent += `\n[The user sent a voice message saved to data/audio/${fileName}. Use audio_transcribe tool with filePath "data/audio/${fileName}" to transcribe it, then respond to the transcribed text as if the user had typed it directly. Do not send back a transcribed version of the user's message, just respond like any other message.]`;
+        } else if (isImage) {
+          const imagesDir = resolve(ws.path, 'data', 'images');
+          await mkdir(imagesDir, { recursive: true });
+          const destPath = resolve(imagesDir, fileName);
+          await writeFile(destPath, buffer);
+          imageParts.push({
+            type: 'image',
+            path: destPath,
+            mediaType: mimeType,
+          });
+          messageContent += `\n[Image saved to data/images/${fileName}. For image_gen tool use localPath "data/images/${fileName}".]`;
+        } else {
+          // Generic document — save to data/files and note in message
+          const filesDir = resolve(ws.path, 'data', 'files');
+          await mkdir(filesDir, { recursive: true });
+          const destPath = resolve(filesDir, att.name);
+          await writeFile(destPath, buffer);
+          messageContent += `\n[File "${att.name}" saved to data/files/${att.name}.]`;
+        }
+      }
+
+      if (imageParts.length > 0) {
+        const caption = messageContent.trim() || 'The user sent an image.';
+        transcriptContent = [
+          { type: 'text', text: caption },
+          ...imageParts,
+        ];
+      } else {
+        transcriptContent = messageContent;
+      }
+    }
+
     // Record user message
     await sessionMgr.appendTranscript(session.id, {
       timestamp: new Date().toISOString(),
       role: 'user',
-      content: text,
+      content: transcriptContent,
     });
 
     // Run agent
@@ -992,11 +1441,7 @@ async function main() {
   });
 
   gateway.registerMethod('chat.history', async (_connectionId, params) => {
-    const { workspaceId, sessionId, limit } = params as {
-      workspaceId: string;
-      sessionId: string;
-      limit?: number;
-    };
+    const { workspaceId, sessionId, limit } = ChatHistoryParamsSchema.parse(params);
     const mgr = sessionManagers.get(workspaceId);
     if (!mgr) return { transcript: [] };
     const transcript = await mgr.getTranscript(sessionId, limit);
@@ -1004,7 +1449,7 @@ async function main() {
   });
 
   gateway.registerMethod('session.list', async (_connectionId, params) => {
-    const { workspaceId } = params as { workspaceId: string };
+    const { workspaceId } = SessionListParamsSchema.parse(params);
     const mgr = sessionManagers.get(workspaceId);
     if (!mgr) return { sessions: [] };
     return { sessions: await mgr.listSessions() };
@@ -1025,7 +1470,7 @@ async function main() {
   });
 
   gateway.registerMethod('workspace.get', async (_connectionId, params) => {
-    const { workspaceId } = params as { workspaceId: string };
+    const { workspaceId } = SessionListParamsSchema.parse(params);
     const ws = workspaces.get(workspaceId);
     if (!ws) throw new Error(`Workspace not found: ${workspaceId}`);
     return { id: ws.id, path: ws.path, agent: ws.agent };
@@ -1425,15 +1870,54 @@ async function main() {
       const sessionMgr = sessionManagers.get(workspaceId)!;
       const session = await sessionMgr.getOrCreate('cron', `cron:${job.id}`);
 
-      // Use workspace default agent for cron jobs
-      const cronAgent = wsForJob.agent;
+      // Use job-specific agent if set, otherwise workspace default
+      const cronAgent = (job.agentId && agentRegistry.has(job.agentId))
+        ? agentRegistry.get(job.agentId)!
+        : wsForJob.agent;
 
-      const toolCtx = buildToolContext(wsForJob, session.id, workspaceId);
+      // Wrap sendMessage so any message delivered to the target channel
+      // (whether via the send_message tool or the post-run delivery below)
+      // is also recorded in that channel's session transcript. This gives
+      // the agent context when the user replies to a cron-delivered message.
+      let deliverySession: import('@scooby/core').SessionMetadata | null = null;
+      const cronSendMessage = async (channelType: string, msg: OutboundMessage) => {
+        await sendMessage(channelType, msg);
+
+        // Record in the delivery channel's session if this targets the job's delivery channel
+        if (
+          job.delivery &&
+          channelType === job.delivery.channel &&
+          msg.conversationId === job.delivery.conversationId
+        ) {
+          if (!deliverySession) {
+            deliverySession = await sessionMgr.getOrCreate(
+              job.delivery.channel,
+              job.delivery.conversationId,
+            );
+          }
+          await sessionMgr.appendTranscript(deliverySession.id, {
+            timestamp: new Date().toISOString(),
+            role: 'assistant',
+            content: msg.text,
+            metadata: {
+              source: 'cron',
+              cronJobId: job.id,
+              cronJobName: job.name ?? job.id,
+            },
+          });
+        }
+      };
+
+      const toolCtx = job.delivery
+        ? buildToolContext(wsForJob, session.id, workspaceId, job.delivery.channel, job.delivery.conversationId)
+        : buildToolContext(wsForJob, session.id, workspaceId);
+      // Use the recording wrapper for cron tool context
+      toolCtx.sendMessage = cronSendMessage;
 
       const agentRunner = new AgentRunner(toolRegistry, cooldowns, sessionMgr);
       let response = '';
       for await (const event of agentRunner.run({
-        messages: [{ role: 'user', content: job.prompt }],
+        messages: [{ role: 'user', content: `[Scheduled Task] Use the send_message tool to deliver your response directly to the user.\n\nTask: ${job.prompt}` }],
         workspaceId,
         workspacePath: wsForJob.path,
         agent: cronAgent,
@@ -1455,16 +1939,27 @@ async function main() {
         }
       }
 
-      // Delivery routing
+      // Delivery routing — if the agent produced a text response (beyond
+      // what it may have already sent via the send_message tool), deliver
+      // it to the target channel. cronSendMessage handles recording.
       if (response && job.delivery) {
-        await sendMessage(job.delivery.channel, {
+        await cronSendMessage(job.delivery.channel, {
           conversationId: job.delivery.conversationId,
           text: response,
           format: 'markdown',
         });
+      } else if (response && !job.delivery) {
+        console.warn(`[Cron] Job "${job.id}" produced a response but has no delivery target — message discarded`);
       }
 
       console.log(`[Cron] Job "${job.id}" completed for workspace ${workspaceId}`);
+
+      // Emit cron.executed event
+      gateway.broadcastToTopic('cron.executed', {
+        workspaceId, jobId: job.id, jobName: job.name ?? job.id,
+        status: 'success', response: response.slice(0, 500),
+      }, workspaceId);
+
       return { response, sessionId: session.id };
     });
 
@@ -1493,6 +1988,21 @@ async function main() {
         console.log(`[Heartbeat] Archived ${archived.length} idle sessions in workspace ${id}`);
       }
     }
+  });
+
+  heartbeat.registerTask('system-health-broadcast', async () => {
+    let activeSessionCount = 0;
+    for (const mgr of sessionManagers.values()) {
+      const sessions = await mgr.listSessions();
+      activeSessionCount += sessions.filter(s => s.status === 'active').length;
+    }
+    gateway.broadcastToTopic('system.health', {
+      uptime: Date.now() - startTime,
+      activeConnections: gateway.getConnections().count,
+      workspaceCount: workspaces.size,
+      activeSessionCount,
+      channels: channelAdapters.map(a => a.type),
+    });
   });
 
   // 13b. Per-workspace agent heartbeats

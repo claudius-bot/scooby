@@ -56,7 +56,7 @@ export async function loadUsageSummary(
   for (const record of records) {
     addToBucket(totals, record);
 
-    const modelKey = `${record.provider}:${record.model}`;
+    const modelKey = `${record.provider}/${record.model}`;
     if (!byModel[modelKey]) byModel[modelKey] = emptyBucket();
     addToBucket(byModel[modelKey], record);
 

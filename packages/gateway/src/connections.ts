@@ -9,6 +9,7 @@ export interface Connection {
   connectedAt: Date;
   lastPingAt: Date;
   alive: boolean;
+  subscriptions: Set<string>;
 }
 
 export class ConnectionManager {
@@ -22,6 +23,7 @@ export class ConnectionManager {
       connectedAt: new Date(),
       lastPingAt: new Date(),
       alive: true,
+      subscriptions: new Set(),
     };
     this.connections.set(id, conn);
     return conn;
@@ -56,6 +58,30 @@ export class ConnectionManager {
 
   broadcast(workspaceId: string, data: WsEvent): void {
     for (const conn of this.getByWorkspace(workspaceId)) {
+      if (conn.ws.readyState === WebSocket.OPEN) {
+        conn.ws.send(JSON.stringify(data));
+      }
+    }
+  }
+
+  subscribe(connectionId: string, topic: string): void {
+    const conn = this.connections.get(connectionId);
+    if (conn) {
+      conn.subscriptions.add(topic);
+    }
+  }
+
+  unsubscribe(connectionId: string, topic: string): void {
+    const conn = this.connections.get(connectionId);
+    if (conn) {
+      conn.subscriptions.delete(topic);
+    }
+  }
+
+  broadcastToTopic(topic: string, data: WsEvent, workspaceId?: string): void {
+    for (const conn of this.connections.values()) {
+      if (!conn.subscriptions.has(topic)) continue;
+      if (workspaceId && conn.workspaceId && conn.workspaceId !== workspaceId) continue;
       if (conn.ws.readyState === WebSocket.OPEN) {
         conn.ws.send(JSON.stringify(data));
       }

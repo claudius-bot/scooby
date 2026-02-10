@@ -8,7 +8,8 @@
     "typecheck": "turbo run typecheck",
     "clean": "turbo run clean",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "sync-models": "node scripts/generate-models-data.mjs --fetch"
   },
   "devDependencies": {
     "@types/node": "^25.2.0",

@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 // JSON-RPC-like protocol
 export interface WsRequest {
   id: string;
@@ -23,29 +25,58 @@ export type WsMethod =
   | 'session.list'
   | 'session.get'
   | 'workspace.list'
-  | 'workspace.get';
+  | 'workspace.get'
+  | 'subscribe'
+  | 'unsubscribe';
 
-// Method parameter types
-export interface ChatSendParams {
-  workspaceId: string;
-  text: string;
-  conversationId?: string;
-}
+// ── Method parameter schemas ─────────────────────────────────────────────
 
-export interface ChatHistoryParams {
-  workspaceId: string;
-  sessionId: string;
-  limit?: number;
-}
+export const ChatSendAttachmentSchema = z.object({
+  name: z.string(),
+  type: z.string(),
+  dataUrl: z.string(),
+});
 
-export interface SessionListParams {
-  workspaceId: string;
-}
+export const ChatSendParamsSchema = z.object({
+  workspaceId: z.string(),
+  text: z.string(),
+  conversationId: z.string().optional(),
+  attachments: z.array(ChatSendAttachmentSchema).optional(),
+});
 
-export interface SessionGetParams {
-  workspaceId: string;
-  sessionId: string;
-}
+export const ChatHistoryParamsSchema = z.object({
+  workspaceId: z.string(),
+  sessionId: z.string(),
+  limit: z.number().optional(),
+});
+
+export const SessionListParamsSchema = z.object({
+  workspaceId: z.string(),
+});
+
+export const SessionGetParamsSchema = z.object({
+  workspaceId: z.string(),
+  sessionId: z.string(),
+});
+
+export const SubscribeParamsSchema = z.object({
+  topics: z.array(z.string()),
+  workspaceId: z.string().optional(),
+});
+
+export const UnsubscribeParamsSchema = z.object({
+  topics: z.array(z.string()),
+});
+
+// ── Inferred types ───────────────────────────────────────────────────────
+
+export type ChatSendAttachment = z.infer<typeof ChatSendAttachmentSchema>;
+export type ChatSendParams = z.infer<typeof ChatSendParamsSchema>;
+export type ChatHistoryParams = z.infer<typeof ChatHistoryParamsSchema>;
+export type SessionListParams = z.infer<typeof SessionListParamsSchema>;
+export type SessionGetParams = z.infer<typeof SessionGetParamsSchema>;
+export type SubscribeParams = z.infer<typeof SubscribeParamsSchema>;
+export type UnsubscribeParams = z.infer<typeof UnsubscribeParamsSchema>;
 
 // Event types pushed by server
 export type ServerEvent =
@@ -55,7 +86,25 @@ export type ServerEvent =
   | 'chat.done'
   | 'chat.error'
   | 'chat.model-switch'
-  | 'chat.message';
+  | 'chat.message'
+  | 'session.created'
+  | 'session.archived'
+  | 'session.agent-switched'
+  | 'workspace.updated'
+  | 'cron.executed'
+  | 'system.health';
+
+/**
+ * Known subscription topic names for wildcard expansion.
+ */
+export const SUBSCRIPTION_TOPICS = [
+  'session.created',
+  'session.archived',
+  'session.agent-switched',
+  'workspace.updated',
+  'cron.executed',
+  'system.health',
+] as const;
 
 export function createResponse(id: string, result: unknown): WsResponse {
   return { id, result };

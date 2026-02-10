@@ -1,7 +1,9 @@
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readFile, readdir, stat, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { AgentDefinitionSchema } from '@scooby/schemas';
 import type { AgentProfile } from '../workspace/types.js';
+
+const AVATAR_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'svg'] as const;
 
 async function safeRead(filePath: string, fallback = ''): Promise<string> {
   try {
@@ -12,6 +14,23 @@ async function safeRead(filePath: string, fallback = ''): Promise<string> {
     }
     throw err;
   }
+}
+
+/**
+ * Detect an avatar file in the agent directory.
+ * Returns the filename (e.g. "avatar.jpg") if found, or empty string.
+ */
+async function detectAvatar(agentDir: string): Promise<string> {
+  for (const ext of AVATAR_EXTENSIONS) {
+    const filePath = join(agentDir, `avatar.${ext}`);
+    try {
+      await access(filePath);
+      return `avatar.${ext}`;
+    } catch {
+      // not found, try next
+    }
+  }
+  return '';
 }
 
 /**
@@ -28,6 +47,9 @@ export async function loadAgentDefinitions(agentsDir: string): Promise<Map<strin
     console.warn(`[AgentLoader] Agents directory not found: ${agentsDir}`);
     return agents;
   }
+
+  // Load shared TOOLS.md from the agents root (universal tool docs for all agents)
+  const sharedTools = await safeRead(join(agentsDir, 'TOOLS.md'));
 
   for (const entry of entries) {
     const agentDir = join(agentsDir, entry);
@@ -57,29 +79,33 @@ export async function loadAgentDefinitions(agentsDir: string): Promise<Map<strin
 
     const def = result.data;
 
-    // Load markdown files in parallel
-    const [identity, soul, tools, scratchpad] = await Promise.all([
+    // Load markdown files in parallel; detect avatar file
+    const [identity, soul, tools, scratchpad, avatarFile] = await Promise.all([
       safeRead(join(agentDir, 'IDENTITY.md')),
       safeRead(join(agentDir, 'SOUL.md')),
       safeRead(join(agentDir, 'TOOLS.md')),
       safeRead(join(agentDir, 'SCRATCHPAD.md')),
+      detectAvatar(agentDir),
     ]);
+
+    // Combine shared universal TOOLS.md with agent-specific TOOLS.md
+    const combinedTools = [sharedTools, tools].filter(Boolean).join('\n\n---\n\n');
 
     const profile: AgentProfile = {
       name: def.name,
       vibe: '',
       emoji: def.emoji,
-      avatar: def.avatar,
+      avatar: avatarFile || def.avatar,
       soul,
       identity,
-      tools,
+      tools: combinedTools,
       configured: true,
       scratchpad,
       heartbeatChecklist: '',
       id: def.id,
       about: def.about,
       modelRef: def.model,
-      fallbackModelRef: def.fallbackModel,
+      fallbackModelRef: def.fallbackModel ?? undefined,
       allowedTools: def.tools,
       universalTools: def.universal,
       skillNames: def.skills,

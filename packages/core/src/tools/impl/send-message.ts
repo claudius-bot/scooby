@@ -8,8 +8,11 @@ export const sendMessageTool: ScoobyToolDefinition = {
     message: z.string().describe('Message text to send'),
   }),
   async execute(input, ctx) {
-    await ctx.sendMessage(ctx.session.workspaceId, {
-      conversationId: ctx.session.id,
+    if (!ctx.conversation) {
+      return 'Error: No active conversation to send a message to.';
+    }
+    await ctx.sendMessage(ctx.conversation.channelType, {
+      conversationId: ctx.conversation.conversationId,
       text: input.message,
       format: 'markdown',
     });

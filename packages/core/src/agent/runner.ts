@@ -24,6 +24,20 @@ import { buildSystemPrompt, type PromptContext } from './prompt-builder.js';
 import { loadSkills } from './skills.js';
 import type { UsageTracker } from '../usage/tracker.js';
 import { estimateCost } from '../usage/pricing.js';
+import { getModel } from '@scooby/schemas';
+
+/**
+ * Derive the max characters for a single tool result from the model's
+ * context window.  We allow tool results to occupy at most ~30% of the
+ * context (in chars, using a 4-char-per-token estimate).  Falls back to
+ * undefined (the registry will use its own fallback constant).
+ */
+function deriveMaxToolResultChars(candidate: { provider: string; model: string }): number | undefined {
+  const info = getModel(`${candidate.provider}/${candidate.model}`);
+  if (!info || info.context_window <= 0) return undefined;
+  // 30% of context window, converted from tokens to chars (~4 chars/token)
+  return Math.floor(info.context_window * 0.3 * 4);
+}
 
 export type AgentStreamEvent =
   | { type: 'text-delta'; content: string }
@@ -164,6 +178,11 @@ export class AgentRunner {
       return;
     }
 
+    // Set tool result cap based on the selected model's context window.
+    // This is read dynamically by capToolResult in the ToolRegistry, so
+    // updating it after escalation will adjust the cap for subsequent calls.
+    options.toolContext.maxToolResultChars = deriveMaxToolResultChars(selection.candidate);
+
     let fullResponse = '';
     let lastToolResult = '';
     let totalPromptTokens = 0;
@@ -257,12 +276,12 @@ export class AgentRunner {
 
         // Check if we need to escalate and re-run with a stronger model
         if (escState.escalated && currentGroup === 'fast' && stepHadToolCalls) {
-          const previousModel = `${selection.candidate.provider}:${selection.candidate.model}`;
+          const previousModel = `${selection.candidate.provider}/${selection.candidate.model}`;
           currentGroup = 'slow';
           const newSelection = selectModel(currentGroup);
 
           if (newSelection) {
-            const newModel = `${newSelection.candidate.provider}:${newSelection.candidate.model}`;
+            const newModel = `${newSelection.candidate.provider}/${newSelection.candidate.model}`;
             yield {
               type: 'model-switch',
               from: previousModel,
@@ -272,6 +291,9 @@ export class AgentRunner {
 
             selection = newSelection;
             needsEscalationRerun = true;
+
+            // Update tool result cap for the new model
+            options.toolContext.maxToolResultChars = deriveMaxToolResultChars(selection.candidate);
 
             // Append the AI SDK's own response messages so the slow model sees
             // the full tool interaction history (tool-call + tool-result pairs).
@@ -294,10 +316,12 @@ export class AgentRunner {
         }
       }
 
-      // If model produced no text but did call tools, use the last tool result as response
-      if (!fullResponse && lastToolResult) {
-        fullResponse = lastToolResult;
-      }
+      // If model produced no text but did call tools, do NOT dump raw tool
+      // results as the response — they are intermediate data (e.g. JSON from
+      // web_search/web_fetch) and not meant to be shown verbatim to the user.
+      // The model should always generate a natural-language summary after
+      // using tools; if it didn't, leave the response empty rather than
+      // surfacing raw JSON.
 
       // Record final response to transcript
       if (fullResponse) {
@@ -306,11 +330,13 @@ export class AgentRunner {
           role: 'assistant',
           content: fullResponse,
           metadata: {
-            modelUsed: `${selection.candidate.provider}:${selection.candidate.model}`,
+            modelUsed: `${selection.candidate.provider}/${selection.candidate.model}`,
             modelGroup: currentGroup,
             escalated: escState.escalated,
             escalationReason: escState.reason,
             tokenUsage: { prompt: totalPromptTokens, completion: totalCompletionTokens },
+            agentId: options.agent.id,
+            agentName: options.agentName ?? options.agent.name,
           },
         });
       }
@@ -337,7 +363,22 @@ export class AgentRunner {
         });
       }
     } catch (err) {
-      fullResponse = `Error during agent execution: ${err instanceof Error ? err.message : String(err)}`;
+      const errMsg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+      const isContextOverflow =
+        errMsg.includes('context length') ||
+        errMsg.includes('context window') ||
+        errMsg.includes('too many tokens') ||
+        errMsg.includes('maximum context') ||
+        errMsg.includes('token limit') ||
+        (errMsg.includes('prompt') && errMsg.includes('too large'));
+
+      if (isContextOverflow) {
+        fullResponse =
+          'The conversation has grown too long for the current model context window. ' +
+          'Consider starting a new session or using more targeted tool calls (e.g. smaller file reads with offset/limit).';
+      } else {
+        fullResponse = `Error during agent execution: ${err instanceof Error ? err.message : String(err)}`;
+      }
     }
 
     yield {
