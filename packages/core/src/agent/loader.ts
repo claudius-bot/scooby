@@ -105,7 +105,7 @@ export async function loadAgentDefinitions(agentsDir: string): Promise<Map<strin
       id: def.id,
       about: def.about,
       modelRef: def.model,
-      fallbackModelRef: def.fallbackModel,
+      fallbackModelRef: def.fallbackModel ?? undefined,
       allowedTools: def.tools,
       universalTools: def.universal,
       skillNames: def.skills,
