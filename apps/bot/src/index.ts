@@ -4,6 +4,7 @@ import { copyFile, mkdir, unlink, readdir, stat, readFile, writeFile } from 'nod
 import { config as loadEnv } from 'dotenv';
 import {
   loadConfig,
+  createCachedConfigLoader,
   loadWorkspace,
   type Workspace,
   type ScoobyConfig,
@@ -95,6 +96,15 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // Load .env from project root
 loadEnv({ path: resolve(__dirname, '..', '..', '..', '.env') });
 
+// Strip embedded line breaks from API keys/tokens that may have been
+// introduced by copy-pasting from password managers or web UIs.
+const KEY_SUFFIXES = ['_KEY', '_TOKEN', '_SECRET'];
+for (const [key, value] of Object.entries(process.env)) {
+  if (value && KEY_SUFFIXES.some((s) => key.endsWith(s)) && /[\r\n]/.test(value)) {
+    process.env[key] = value.replace(/[\r\n]+/g, '');
+  }
+}
+
 async function main() {
   const startTime = Date.now();
   console.log('[Scooby] Starting...');
@@ -117,11 +127,13 @@ async function main() {
   const agentRegistry = new AgentRegistry(agentProfiles);
   console.log(`[Scooby] Loaded ${agentProfiles.size} agents: ${Array.from(agentProfiles.keys()).join(', ')}`);
 
-  // 1d. Create agent router
+  // 1d. Create agent router (with live config reload for routing changes)
+  const cachedConfigLoader = createCachedConfigLoader(configPath);
   const agentRouter = new AgentRouter(
     agentRegistry,
     config.models.fast.candidates,
     config.routing,
+    cachedConfigLoader,
   );
 
   // 2. Load workspaces
@@ -482,7 +494,7 @@ async function main() {
   // ── Agent resolution helper ───────────────────────────────────────
   /**
    * Resolve which agent should handle a message for a given session.
-   * Priority: session.agentId > emoji detection > workspace default > router > fallback
+   * Priority: emoji detection > session.agentId > workspace default > router > fallback
    */
   async function resolveAgent(
     session: import('@scooby/core').SessionMetadata,

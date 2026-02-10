@@ -41,6 +41,12 @@ export interface ToolContext {
   cronScheduler?: WorkspaceCronScheduler;
   agentRegistry?: AgentRegistryRef;
   setSessionAgent?: (agentId: string) => Promise<void>;
+  /**
+   * Maximum characters allowed in a single tool result, derived from the
+   * active model's context window.  Set by the AgentRunner before tool
+   * execution begins.  The ToolRegistry caps results to this limit.
+   */
+  maxToolResultChars?: number;
 }
 
 export interface ScoobyToolDefinition<TInput extends z.ZodType = z.ZodType> {

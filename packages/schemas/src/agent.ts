@@ -23,7 +23,7 @@ export const AgentDefinitionSchema = z.object({
   avatar: z.string().default(''),
   about: z.string(),
   model: z.string().default('fast'),
-  fallbackModel: z.string().optional(),
+  fallbackModel: z.string().nullable().optional(),
   tools: z.array(z.string()).default([]),
   skills: z.array(z.string()).default([]),
   universal: z.boolean().default(true),

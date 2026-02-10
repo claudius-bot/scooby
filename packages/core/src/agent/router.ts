@@ -6,22 +6,29 @@ import { getLanguageModel } from '../ai/provider.js';
 
 const routerCooldowns = new CooldownTracker();
 
+export type ConfigGetter = () => Promise<{ routing?: RoutingConfig; models: { fast: { candidates: ModelCandidate[] } } }>;
+
 /**
  * Routes user messages to the most appropriate agent using a cheap/fast LLM.
+ * Accepts either static config or a getter for live-reloading config from disk.
  */
 export class AgentRouter {
   private registry: AgentRegistry;
-  private routingConfig?: RoutingConfig;
-  private fastCandidates: ModelCandidate[];
+  private getConfig: ConfigGetter;
 
   constructor(
     registry: AgentRegistry,
     fastCandidates: ModelCandidate[],
     routingConfig?: RoutingConfig,
+    configGetter?: ConfigGetter,
   ) {
     this.registry = registry;
-    this.routingConfig = routingConfig;
-    this.fastCandidates = fastCandidates;
+    // If a config getter is provided, use it for live reload.
+    // Otherwise fall back to static snapshot (backwards compatible).
+    this.getConfig = configGetter ?? (async () => ({
+      routing: routingConfig,
+      models: { fast: { candidates: fastCandidates } },
+    }));
   }
 
   /**
@@ -32,12 +39,16 @@ export class AgentRouter {
     if (agents.length === 0) return this.registry.getDefaultId();
     if (agents.length === 1) return agents[0][0];
 
+    // Fresh config for routing lookup — picks up binding/model changes
+    // without restart (config is TTL-cached so disk reads are minimal).
+    const cfg = await this.getConfig();
+
     // Build agent descriptions for the router prompt
     const agentList = agents
       .map(([id, a]) => `- ${id}: ${a.about ?? a.name}`)
       .join('\n');
 
-    const systemPrompt = this.routingConfig?.prompt ??
+    const systemPrompt = cfg.routing?.prompt ??
       `You are a message router. Given a user message, select the most appropriate agent to handle it.
 
 Available agents:
@@ -46,7 +57,7 @@ ${agentList}
 Respond with ONLY the agent id (e.g., "scooby"). Nothing else.`;
 
     // Resolve model candidates
-    const candidates = this.resolveCandidates();
+    const candidates = this.resolveCandidates(cfg);
     if (candidates.length === 0) {
       return this.registry.getDefaultId();
     }
@@ -78,10 +89,10 @@ Respond with ONLY the agent id (e.g., "scooby"). Nothing else.`;
     }
   }
 
-  private resolveCandidates(): FailoverCandidate[] {
+  private resolveCandidates(cfg: Awaited<ReturnType<ConfigGetter>>): FailoverCandidate[] {
     // If routing config specifies a model, parse "provider/model" format
-    if (this.routingConfig?.model) {
-      const parts = this.routingConfig.model.split('/');
+    if (cfg.routing?.model) {
+      const parts = cfg.routing.model.split('/');
       if (parts.length === 2) {
         const [provider, model] = parts;
         return [{
@@ -92,8 +103,9 @@ Respond with ONLY the agent id (e.g., "scooby"). Nothing else.`;
     }
 
     // Fall back to first fast candidate
-    if (this.fastCandidates.length > 0) {
-      const c = this.fastCandidates[0];
+    const fastCandidates = cfg.models.fast.candidates;
+    if (fastCandidates.length > 0) {
+      const c = fastCandidates[0];
       return [{
         model: getLanguageModel(c.provider, c.model),
         candidate: c,

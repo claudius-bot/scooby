@@ -27,6 +27,15 @@ export function ChatMessage({ message, showAvatar = false }: ChatMessageProps) {
     );
   }
 
+  // Compaction divider
+  if (message.role === 'system' && message.content.startsWith('__compaction:')) {
+    return (
+      <div className="divider-text my-4 select-none text-neutral-400">
+        Older messages compacted
+      </div>
+    );
+  }
+
   // System messages
   if (message.role === 'system') {
     return (

@@ -248,7 +248,14 @@ export class SessionManager {
     const count = await store.lineCount();
     if (count > this.config.maxTranscriptLines) {
       const entries = await store.readLast(this.config.maxTranscriptLines);
-      await store.rewrite(entries);
+      const droppedCount = count - entries.length;
+      // Prepend a compaction marker so the UI can show a divider
+      const marker: TranscriptEntry = {
+        timestamp: new Date().toISOString(),
+        role: 'system',
+        content: `__compaction:${droppedCount}`,
+      };
+      await store.rewrite([marker, ...entries]);
     }
   }
 }

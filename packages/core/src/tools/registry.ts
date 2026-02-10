@@ -3,6 +3,30 @@ import type { ScoobyToolDefinition, ToolContext } from './types.js';
 import { checkToolPermission } from './permissions.js';
 import type { AgentProfile } from '../workspace/types.js';
 
+/**
+ * Absolute hard cap when no model context info is available (~100K tokens).
+ * When the model's context_window is known the cap is derived from it
+ * (30% of context_window × 4 chars/token) so tool results never dominate
+ * the prompt.
+ */
+const FALLBACK_MAX_TOOL_RESULT_CHARS = 400_000;
+
+function getMaxChars(ctx: ToolContext): number {
+  return ctx.maxToolResultChars ?? FALLBACK_MAX_TOOL_RESULT_CHARS;
+}
+
+function capToolResult(result: unknown, ctx: ToolContext): unknown {
+  const maxChars = getMaxChars(ctx);
+  if (typeof result === 'string' && result.length > maxChars) {
+    const truncated = result.slice(0, maxChars);
+    // Cut at the last newline to avoid splitting mid-line
+    const lastNl = truncated.lastIndexOf('\n');
+    const clean = lastNl > maxChars * 0.8 ? truncated.slice(0, lastNl) : truncated;
+    return clean + `\n\n[Truncated — result exceeded ${maxChars} characters. Use offset/limit parameters for targeted reads.]`;
+  }
+  return result;
+}
+
 export const UNIVERSAL_TOOLS = [
   'memory_search',
   'memory_get',
@@ -37,7 +61,7 @@ export class ToolRegistry {
       result[name] = tool({
         description: def.description,
         inputSchema: def.inputSchema,
-        execute: async (input) => def.execute(input, ctx),
+        execute: async (input) => capToolResult(await def.execute(input, ctx), ctx),
       });
     }
     return result;
@@ -68,7 +92,7 @@ export class ToolRegistry {
       result[name] = tool({
         description: def.description,
         inputSchema: def.inputSchema,
-        execute: async (input) => def.execute(input, ctx),
+        execute: async (input) => capToolResult(await def.execute(input, ctx), ctx),
       });
     }
     return result;

@@ -67,3 +67,45 @@ export async function loadConfig(configPath: string): Promise<ScoobyConfig> {
 
   return resolved;
 }
+
+// ── Cached config loader ─────────────────────────────────────────────
+//
+// Returns a function that re-reads the config from disk at most once per
+// TTL interval (default 500ms).  On parse failure it returns the last
+// known-good config so a corrupted save doesn't crash the runtime.
+
+const DEFAULT_CONFIG_CACHE_MS = 500;
+
+export function createCachedConfigLoader(
+  configPath: string,
+  ttlMs = DEFAULT_CONFIG_CACHE_MS,
+): () => Promise<ScoobyConfig> {
+  let cached: ScoobyConfig | null = null;
+  let lastLoadMs = 0;
+  let loading: Promise<ScoobyConfig> | null = null;
+
+  return async () => {
+    const now = Date.now();
+    if (cached && now - lastLoadMs < ttlMs) return cached;
+
+    // Coalesce concurrent requests into a single disk read
+    if (!loading) {
+      loading = loadConfig(configPath)
+        .then((cfg) => {
+          cached = cfg;
+          lastLoadMs = Date.now();
+          loading = null;
+          return cfg;
+        })
+        .catch((err) => {
+          loading = null;
+          if (cached) {
+            console.warn('[Config] Failed to reload config, using cached version:', err);
+            return cached;
+          }
+          throw err;
+        });
+    }
+    return loading;
+  };
+}

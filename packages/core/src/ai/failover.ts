@@ -1,4 +1,5 @@
 import { streamText, generateText, stepCountIs, type ModelMessage, type LanguageModel } from 'ai';
+import { getModel } from '@scooby/schemas';
 import { CooldownTracker } from './model-group.js';
 
 // ── Error classification ────────────────────────────────────────────────
@@ -39,7 +40,7 @@ export function classifyError(error: unknown): ErrorCategory {
 }
 
 export function isRetryable(category: ErrorCategory): boolean {
-  return category === 'rate_limit' || category === 'timeout' || category === 'unknown';
+  return category === 'rate_limit' || category === 'timeout' || category === 'unknown' || category === 'format';
 }
 
 // ── Cooldown durations per error category (ms) ─────────────────────────
@@ -76,6 +77,16 @@ function candidateLabel(c: FailoverCandidate): string {
   return `${c.candidate.provider}/${c.candidate.model}`;
 }
 
+/** Clamp maxTokens to the model's context window so we never send an invalid config. */
+function clampMaxTokens(candidate: FailoverCandidate['candidate']): number | undefined {
+  if (!candidate.maxTokens) return undefined;
+  const info = getModel(`${candidate.provider}/${candidate.model}`);
+  if (info && info.context_window > 0) {
+    return Math.min(candidate.maxTokens, info.context_window);
+  }
+  return candidate.maxTokens;
+}
+
 // ── generateWithFailover ────────────────────────────────────────────────
 
 /**
@@ -97,7 +108,7 @@ export async function generateWithFailover(options: FailoverOptions): Promise<Aw
         system,
         tools: tools as Parameters<typeof generateText>[0]['tools'],
         ...(stopWhenStepCount ? { stopWhen: stepCountIs(stopWhenStepCount) } : {}),
-        ...(current.candidate.maxTokens ? { maxOutputTokens: current.candidate.maxTokens } : {}),
+        ...(current.candidate.maxTokens ? { maxOutputTokens: clampMaxTokens(current.candidate) } : {}),
       });
       return result;
     } catch (err) {
@@ -146,7 +157,7 @@ export async function streamWithFailover(options: FailoverOptions): Promise<Awai
         system,
         tools: tools as Parameters<typeof streamText>[0]['tools'],
         ...(stopWhenStepCount ? { stopWhen: stepCountIs(stopWhenStepCount) } : {}),
-        ...(current.candidate.maxTokens ? { maxOutputTokens: current.candidate.maxTokens } : {}),
+        ...(current.candidate.maxTokens ? { maxOutputTokens: clampMaxTokens(current.candidate) } : {}),
       });
 
       // Await the first chunk to verify the stream is alive.  If the
